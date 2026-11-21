@@ -1,13 +1,14 @@
 
 import os
 import logging
+import threading
+from http.server import HTTPServer, BaseHTTPRequestHandler
+
 from telegram import Update
 from telegram.ext import (
     Application,
     CommandHandler,
-    MessageHandler,
     ContextTypes,
-    filters,
 )
 
 logging.basicConfig(
@@ -17,6 +18,17 @@ logging.basicConfig(
 
 OWNER_ID = 7361198009
 TOKEN = os.getenv("BOT_TOKEN")
+PORT = int(os.getenv("PORT", "10000"))
+
+
+class HealthHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.end_headers()
+        self.wfile.write(b"Bot is running!")
+
+    def log_message(self, format, *args):
+        pass
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -36,12 +48,15 @@ async def owner_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("این دستور مخصوص مالک ربات است.")
         return
 
-    await update.message.reply_text("سلام مالک! دستورات مدیریتی فقط با اجازه تو اجرا می‌شوند.")
+    await update.message.reply_text("سلام مالک! خوش آمدی!")
 
 
 def main():
     if not TOKEN:
         raise RuntimeError("BOT_TOKEN تنظیم نشده است.")
+
+    server = HTTPServer(("0.0.0.0", PORT), HealthHandler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
 
     app = Application.builder().token(TOKEN).build()
 
@@ -54,4 +69,4 @@ def main():
 
 if __name__ == "__main__":
     main()
-  
+    
