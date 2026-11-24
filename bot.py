@@ -18,8 +18,12 @@ from telegram.ext import (
     CommandHandler,
     MessageHandler,
     ContextTypes,
+    CallbackQueryHandler,
     filters,
 )
+
+from games.guess_number import register_guess_number_handlers
+
 
 # =================================
 # تنظیمات اصلی
@@ -35,10 +39,7 @@ MODEL = "openrouter/free"
 
 PORT = int(os.getenv("PORT", "10000"))
 
-# حداکثر درخواست هم‌زمان به هوش مصنوعی
 MAX_AI_REQUESTS = 2
-
-# تعداد تلاش مجدد در خطاهای موقت
 MAX_RETRIES = 3
 
 logging.basicConfig(
@@ -60,7 +61,6 @@ SYSTEM_PROMPT = """
 بدون درخواست کاربر درباره کدنویسی، زیرساخت یا سازنده خودت توضیح نده.
 """
 
-# صف محدود درخواست‌های هوش مصنوعی
 ai_semaphore = None
 
 
@@ -224,7 +224,7 @@ def ask_ai(user_text):
 
 
 # =================================
-# تشخیص پیام‌های مجاز
+# تشخیص پیام‌های مجاز هوش مصنوعی
 # =================================
 
 def should_respond(update, context):
@@ -235,14 +235,12 @@ def should_respond(update, context):
     if not message or not chat:
         return False
 
-    # در گفت‌وگوی خصوصی همیشه پاسخ بده
     if chat.type == "private":
         return True
 
     bot_id = context.bot.id
     bot_username = context.bot.username
 
-    # ریپلای به پیام ربات
     if message.reply_to_message:
 
         replied_message = message.reply_to_message
@@ -251,7 +249,6 @@ def should_respond(update, context):
         if replied_user and replied_user.id == bot_id:
             return True
 
-    # منشن ربات
     if bot_username:
 
         text = message.text or message.caption or ""
@@ -299,6 +296,8 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "در گفت‌وگوی خصوصی پیام خودت را بفرست.\n\n"
         "در گروه روی پیام PULSE ریپلای کن "
         "یا نام کاربری ربات را منشن کن.\n\n"
+        "برای شروع بازی حدس عدد:\n"
+        "/guessnumber\n\n"
         "به پیام‌های عادی گروه پاسخ نمی‌دهم."
     )
 
@@ -349,7 +348,7 @@ async def send_long_message(message, text):
 
 
 # =================================
-# دریافت و پردازش پیام
+# دریافت و پردازش پیام هوش مصنوعی
 # =================================
 
 async def chat_with_ai(
@@ -362,7 +361,6 @@ async def chat_with_ai(
     if not message:
         return
 
-    # پشتیبانی از متن و کپشن
     user_text = message.text or message.caption or ""
 
     if not user_text.strip():
@@ -373,7 +371,6 @@ async def chat_with_ai(
 
     user_text = user_text.strip()
 
-    # حذف منشن ربات از متن
     username = context.bot.username
 
     if username:
@@ -394,7 +391,6 @@ async def chat_with_ai(
 
     try:
 
-        # مدیریت تعداد درخواست‌های هم‌زمان
         async with ai_semaphore:
 
             await context.bot.send_chat_action(
@@ -440,7 +436,6 @@ def main():
     if not API_KEY:
         raise RuntimeError("API_KEY تنظیم نشده است.")
 
-    # سرور سلامت Railway
     health_thread = threading.Thread(
         target=start_health_server,
         daemon=True,
@@ -471,6 +466,9 @@ def main():
         CommandHandler("owner", owner_command)
     )
 
+    # اتصال بازی‌های PULSE
+    register_guess_number_handlers(application)
+
     application.add_handler(
         MessageHandler(
             (filters.TEXT | filters.CAPTION) & ~filters.COMMAND,
@@ -487,4 +485,4 @@ def main():
 
 if __name__ == "__main__":
     main()
-    
+            
