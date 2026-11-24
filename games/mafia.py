@@ -29,14 +29,25 @@ MIN_PLAYERS = 4
 
 ASSET_DIR = Path(__file__).parent / "assets" / "mafia"
 
-CHARACTER_IMAGES = [
-    ASSET_DIR / "character_1.jpg",
-    ASSET_DIR / "character_2.jpg",
-    ASSET_DIR / "character_3.jpg",
-    ASSET_DIR / "character_4.jpg",
-    ASSET_DIR / "character_5.jpg",
-    ASSET_DIR / "character_6.jpg",
-]
+# پشتیبانی از JPG، JPEG و PNG با هر نامی
+IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png"}
+
+
+def get_character_images():
+    if not ASSET_DIR.is_dir():
+        logger.warning("Mafia asset directory not found: %s", ASSET_DIR)
+        return []
+
+    images = [
+        path
+        for path in ASSET_DIR.iterdir()
+        if path.is_file() and path.suffix.lower() in IMAGE_EXTENSIONS
+    ]
+
+    if not images:
+        logger.warning("No mafia images found in: %s", ASSET_DIR)
+
+    return images
 
 
 def intro_text():
@@ -119,25 +130,33 @@ def player_list_text(game):
     return "\n".join(lines)
 
 
-async def update_registration_message(query, game):
-    text = player_list_text(game)
-    keyboard = registration_keyboard(game["id"])
-
+async def update_message(query, text, keyboard=None):
     try:
         await query.edit_message_caption(
             caption=text,
             reply_markup=keyboard,
             parse_mode="HTML",
         )
+        return
     except BadRequest:
-        try:
-            await query.edit_message_text(
-                text=text,
-                reply_markup=keyboard,
-                parse_mode="HTML",
-            )
-        except BadRequest:
-            logger.exception("Could not update mafia registration message")
+        pass
+
+    try:
+        await query.edit_message_text(
+            text=text,
+            reply_markup=keyboard,
+            parse_mode="HTML",
+        )
+    except BadRequest:
+        logger.exception("Could not update mafia message")
+
+
+async def update_registration_message(query, game):
+    await update_message(
+        query,
+        player_list_text(game),
+        registration_keyboard(game["id"]),
+    )
 
 
 async def mafia_command(
@@ -147,9 +166,7 @@ async def mafia_command(
     if not update.message:
         return
 
-    available_images = [
-        path for path in CHARACTER_IMAGES if path.is_file()
-    ]
+    available_images = get_character_images()
 
     if available_images:
         selected_image = random.choice(available_images)
@@ -162,9 +179,17 @@ async def mafia_command(
                     reply_markup=intro_keyboard(),
                     parse_mode="HTML",
                 )
+            logger.info(
+                "Mafia intro image sent: %s",
+                selected_image.name,
+            )
             return
+
         except Exception:
-            logger.exception("Could not send mafia intro image")
+            logger.exception(
+                "Could not send mafia intro image: %s",
+                selected_image,
+            )
 
     await update.message.reply_text(
         intro_text(),
@@ -203,7 +228,6 @@ async def join_mafia_game(
     context: ContextTypes.DEFAULT_TYPE,
 ):
     query = update.callback_query
-    await query.answer()
 
     game_id = query.data.split(":", 1)[1]
     game = get_game(game_id)
@@ -225,6 +249,7 @@ async def join_mafia_game(
         await query.answer(message, show_alert=True)
         return
 
+    await query.answer("با موفقیت وارد بازی شدی.")
     await update_registration_message(query, game)
 
 
@@ -277,21 +302,10 @@ async def cancel_mafia_game(
     await remove_game(game_id)
     await query.answer("بازی با موفقیت لغو شد.")
 
-    try:
-        await query.edit_message_caption(
-            caption="❌ <b>این بازی توسط برگزارکننده لغو شد.</b>",
-            reply_markup=None,
-            parse_mode="HTML",
-        )
-    except BadRequest:
-        try:
-            await query.edit_message_text(
-                "❌ <b>این بازی توسط برگزارکننده لغو شد.</b>",
-                reply_markup=None,
-                parse_mode="HTML",
-            )
-        except BadRequest:
-            logger.exception("Could not update cancelled mafia message")
+    await update_message(
+        query,
+        "❌ <b>این بازی توسط برگزارکننده لغو شد.</b>",
+    )
 
     logger.info(
         "Mafia game cancelled: game=%s owner=%s",
@@ -347,15 +361,14 @@ async def start_mafia_registration(
 
     await query.answer("ثبت‌نام بسته شد.")
 
-    await query.edit_message_caption(
-        caption=(
+    await update_message(
+        query,
+        (
             "🌙 <b>ثبت‌نام بازی مافیا بسته شد!</b>\n\n"
             f"👥 تعداد بازیکنان: {len(game['players'])}\n"
             "✅ بازیکنان با موفقیت ثبت‌نام شدند.\n\n"
             "🎭 مرحله بعد: آماده‌سازی و ارسال خصوصی نقش‌ها."
         ),
-        reply_markup=None,
-        parse_mode="HTML",
     )
 
     logger.info("Mafia registration closed: game=%s", game_id)
@@ -409,4 +422,4 @@ def register_mafia_handlers(application: Application):
     )
 
     logger.info("Mafia handlers registered successfully")
-  
+    
