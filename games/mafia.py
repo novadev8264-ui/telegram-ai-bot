@@ -28,54 +28,55 @@ logger = logging.getLogger("PULSE.MAFIA")
 MIN_PLAYERS = 4
 
 ASSET_DIR = Path(__file__).parent / "assets" / "mafia"
-IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png"}
+
+# نام واقعی ۶ تصویر؛ بدون تغییر نام فایل‌ها
+IMAGE_FILES = [
+    "file_00000000d2a481f4ba3c8367b292eaee.png",
+    "file_00000000504481f4a7e8fa6eae44dd28.png",
+    "IMG_۲۰۲۶۱۱۲۴_۲۰۱۷۵۹.jpg",
+    "IMG_۲۰۲۶۱۱۲۴_۲۰۱۰۳۱.jpg",
+    "IMG_۲۰۲۶۱۱۲۴_۲۰۱۰۱۲.jpg",
+    "IMG_۲۰۲۶۱۱۲۴_۲۰۰۸۳۴.jpg",
+]
 
 
 def get_character_images():
-    logger.info("========== MAFIA IMAGE DIAGNOSTICS ==========")
-    logger.info("Mafia asset directory: %s", ASSET_DIR.resolve())
-    logger.info("Directory exists: %s", ASSET_DIR.is_dir())
+    logger.warning("========== MAFIA IMAGE DIAGNOSTICS ==========")
+    logger.warning("Mafia asset directory: %s", ASSET_DIR.resolve())
+    logger.warning("Directory exists: %s", ASSET_DIR.is_dir())
 
     if not ASSET_DIR.is_dir():
         logger.error("MAFIA IMAGE ERROR: Asset directory does not exist.")
         return []
 
-    try:
-        all_files = list(ASSET_DIR.iterdir())
-    except Exception:
-        logger.exception("Could not read mafia asset directory.")
-        return []
+    images = []
 
-    logger.info("Total entries in mafia directory: %s", len(all_files))
+    for filename in IMAGE_FILES:
+        image_path = ASSET_DIR / filename
 
-    for path in all_files:
+        if not image_path.is_file():
+            logger.error("MAFIA IMAGE MISSING: %s", image_path)
+            continue
+
         try:
-            if path.is_file():
-                logger.info(
-                    "MAFIA FILE: name=%s extension=%s size=%s bytes",
-                    path.name,
-                    path.suffix.lower(),
-                    path.stat().st_size,
-                )
+            size = image_path.stat().st_size
+
+            logger.warning(
+                "MAFIA FILE CHECK: name=%s size=%s bytes",
+                filename,
+                size,
+            )
+
+            if size > 0:
+                images.append(image_path)
             else:
-                logger.info("MAFIA DIRECTORY: %s", path.name)
+                logger.error("MAFIA IMAGE EMPTY: %s", filename)
+
         except Exception:
-            logger.exception("Could not inspect file: %s", path.name)
+            logger.exception("Could not inspect image: %s", filename)
 
-    images = [
-        path
-        for path in all_files
-        if path.is_file()
-        and path.suffix.lower() in IMAGE_EXTENSIONS
-        and path.stat().st_size > 0
-    ]
-
-    logger.info("Supported images found: %s", len(images))
-
-    if not images:
-        logger.error("MAFIA IMAGE ERROR: No supported images found.")
-
-    logger.info("========== END IMAGE DIAGNOSTICS ==========")
+    logger.warning("Supported images found: %s", len(images))
+    logger.warning("========== END IMAGE DIAGNOSTICS ==========")
 
     return images
 
@@ -196,14 +197,14 @@ async def mafia_command(
     if not update.message:
         return
 
-    logger.info("MAFIA COMMAND RECEIVED")
+    logger.warning("MAFIA COMMAND RECEIVED")
 
     available_images = get_character_images()
 
     if available_images:
         selected_image = random.choice(available_images)
 
-        logger.info(
+        logger.warning(
             "Selected mafia image: %s",
             selected_image.name,
         )
@@ -217,7 +218,7 @@ async def mafia_command(
                     parse_mode="HTML",
                 )
 
-            logger.info(
+            logger.warning(
                 "MAFIA INTRO IMAGE SENT SUCCESSFULLY: %s",
                 selected_image.name,
             )
@@ -240,7 +241,7 @@ async def mafia_command(
             reply_markup=intro_keyboard(),
             parse_mode="HTML",
         )
-        logger.info("MAFIA TEXT INTRO SENT")
+        logger.warning("MAFIA TEXT INTRO SENT")
     except Exception:
         logger.exception("MAFIA TEXT INTRO SEND FAILED")
 
@@ -469,4 +470,4 @@ def register_mafia_handlers(application: Application):
     )
 
     logger.info("Mafia handlers registered successfully")
-                
+    
