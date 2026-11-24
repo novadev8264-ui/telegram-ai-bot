@@ -1,7 +1,9 @@
 
 import asyncio
+import html
 import logging
 import secrets
+import time
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 
@@ -10,21 +12,20 @@ logger = logging.getLogger("PULSE.GAMES")
 # بازی‌های فعال
 ACTIVE_GAMES = {}
 
-# قفل جلوگیری از ثبت‌نام هم‌زمان تکراری
+# جلوگیری از ثبت‌نام هم‌زمان تکراری
 GAME_LOCK = asyncio.Lock()
 
 
 def player_link(user):
-    """ساخت لینک قابل کلیک برای پروفایل بازیکن."""
+    """ساخت لینک قابل کلیک پروفایل بازیکن."""
 
-    name = user.full_name or "بازیکن"
+    name = html.escape(user.full_name or "بازیکن")
 
     if user.username:
-        return f'<a href="https://t.me/{user.username}">{name}</a>'
+        username = html.escape(user.username)
+        return f'<a href="https://t.me/{username}">{name}</a>'
 
-    return (
-        f'<a href="tg://user?id={user.id}">{name}</a>'
-    )
+    return f'<a href="tg://user?id={user.id}">{name}</a>'
 
 
 def create_game(game_type, owner):
@@ -32,17 +33,27 @@ def create_game(game_type, owner):
 
     game_id = secrets.token_hex(4)
 
-    ACTIVE_GAMES[game_id] = {
+    game = {
         "id": game_id,
         "type": game_type,
         "owner_id": owner.id,
-        "owner_name": owner.full_name,
+        "owner_name": owner.full_name or "بازیکن",
         "players": {},
         "status": "registering",
-        "created_at": asyncio.get_running_loop().time(),
+        "winner_id": None,
+        "created_at": time.time(),
     }
 
-    return ACTIVE_GAMES[game_id]
+    ACTIVE_GAMES[game_id] = game
+
+    logger.info(
+        "Game created: id=%s type=%s owner=%s",
+        game_id,
+        game_type,
+        owner.id,
+    )
+
+    return game
 
 
 def get_game(game_id):
@@ -72,8 +83,17 @@ def game_keyboard(game_id):
     ])
 
 
+def player_link_from_id(game):
+    """لینک پروفایل برگزارکننده."""
+
+    name = html.escape(game["owner_name"])
+    user_id = game["owner_id"]
+
+    return f'<a href="tg://user?id={user_id}">{name}</a>'
+
+
 def game_text(game):
-    """ساخت پیام وضعیت بازی."""
+    """ساخت متن وضعیت بازی."""
 
     players = game["players"]
 
@@ -104,16 +124,8 @@ def game_text(game):
     return "\n".join(lines)
 
 
-def player_link_from_id(game):
-    name = game["owner_name"]
-    user_id = game["owner_id"]
-
-    return (
-        f'<a href="tg://user?id={user_id}">{name}</a>'
-    )
-
-
 async def join_game(game_id, user):
+    """ثبت‌نام بازیکن با جلوگیری از ثبت‌نام تکراری."""
 
     async with GAME_LOCK:
 
@@ -130,16 +142,23 @@ async def join_game(game_id, user):
 
         game["players"][user.id] = {
             "id": user.id,
-            "name": user.full_name,
+            "name": user.full_name or "بازیکن",
             "username": user.username,
             "mention": player_link(user),
             "score": 0,
         }
 
+        logger.info(
+            "Player joined: game=%s user=%s",
+            game_id,
+            user.id,
+        )
+
         return True, "با موفقیت وارد بازی شدی! 🎮"
 
 
 async def close_registration(game_id, user_id):
+    """بستن ثبت‌نام توسط برگزارکننده."""
 
     async with GAME_LOCK:
 
@@ -159,10 +178,13 @@ async def close_registration(game_id, user_id):
 
         game["status"] = "playing"
 
+        logger.info("Game started: %s", game_id)
+
         return True, game
 
 
 async def finish_game(game_id, winner_id=None):
+    """پایان بازی و ثبت برنده."""
 
     async with GAME_LOCK:
 
@@ -171,15 +193,25 @@ async def finish_game(game_id, winner_id=None):
         if not game:
             return None
 
+        if game["status"] == "finished":
+            return game
+
         game["status"] = "finished"
         game["winner_id"] = winner_id
+        game["finished_at"] = time.time()
+
+        logger.info(
+            "Game finished: id=%s winner=%s",
+            game_id,
+            winner_id,
+        )
 
         return game
 
 
 async def remove_game(game_id):
+    """حذف بازی از فهرست بازی‌های فعال."""
 
     async with GAME_LOCK:
-
         return ACTIVE_GAMES.pop(game_id, None)
         
