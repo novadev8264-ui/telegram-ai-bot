@@ -13,7 +13,9 @@ from telegram.ext import (
     Application,
     CommandHandler,
     CallbackQueryHandler,
+    MessageHandler,
     ContextTypes,
+    filters,
 )
 
 from games.manager import (
@@ -449,6 +451,17 @@ async def guess_number_callback(
 
 
 # =================================
+# اجرای بازی با نام فارسی
+# =================================
+
+async def guess_number_text_command(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+):
+    await guess_number_command(update, context)
+
+
+# =================================
 # اتصال هندلرهای بازی به ربات
 # =================================
 
@@ -459,6 +472,13 @@ def register_guess_number_handlers(
         CommandHandler(
             "guessnumber",
             guess_number_command,
+        )
+    )
+
+    application.add_handler(
+        MessageHandler(
+            filters.Regex(r"^\s*بازی حدس عدد\s*$"),
+            guess_number_text_command,
         )
     )
 
@@ -491,3 +511,4 @@ def register_guess_number_handlers(
     )
 
     logger.info("Guess Number game handlers registered.")
+        
