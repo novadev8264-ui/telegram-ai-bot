@@ -13,6 +13,8 @@ from telegram.ext import (
     CallbackQueryHandler,
     CommandHandler,
     ContextTypes,
+    MessageHandler,
+    filters,
 )
 
 from games.manager import (
@@ -373,6 +375,13 @@ def register_tictactoe_handlers(application: Application):
     )
 
     application.add_handler(
+        MessageHandler(
+            filters.Regex(r"^\s*بازی دوز\s*$"),
+            tictactoe_command,
+        )
+    )
+
+    application.add_handler(
         CallbackQueryHandler(join_callback, pattern=r"^ttt_join:")
     )
 
@@ -389,4 +398,4 @@ def register_tictactoe_handlers(application: Application):
     )
 
     logger.info("TicTacToe handlers registered.")
-      
+        
