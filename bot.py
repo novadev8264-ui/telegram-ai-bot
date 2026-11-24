@@ -18,11 +18,11 @@ from telegram.ext import (
     CommandHandler,
     MessageHandler,
     ContextTypes,
-    CallbackQueryHandler,
     filters,
 )
 
 from games.guess_number import register_guess_number_handlers
+from games.tic_tac_toe import register_tictactoe_handlers
 
 
 # =================================
@@ -296,8 +296,11 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "در گفت‌وگوی خصوصی پیام خودت را بفرست.\n\n"
         "در گروه روی پیام PULSE ریپلای کن "
         "یا نام کاربری ربات را منشن کن.\n\n"
-        "برای شروع بازی حدس عدد:\n"
+        "🎮 بازی‌های PULSE:\n\n"
+        "بازی حدس عدد:\n"
         "/guessnumber\n\n"
+        "بازی دوز:\n"
+        "/tictactoe\n\n"
         "به پیام‌های عادی گروه پاسخ نمی‌دهم."
     )
 
@@ -468,6 +471,7 @@ def main():
 
     # اتصال بازی‌های PULSE
     register_guess_number_handlers(application)
+    register_tictactoe_handlers(application)
 
     application.add_handler(
         MessageHandler(
@@ -485,4 +489,4 @@ def main():
 
 if __name__ == "__main__":
     main()
-            
+        
