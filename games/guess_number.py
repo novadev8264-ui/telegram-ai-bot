@@ -1,7 +1,7 @@
 
-import random
 import html
 import logging
+import random
 
 from telegram import (
     InlineKeyboardButton,
@@ -26,19 +26,17 @@ from games.manager import (
 
 logger = logging.getLogger("PULSE.GAMES.GUESS_NUMBER")
 
-
-# -----------------------------
-# تنظیمات بازی
-# -----------------------------
-
 MIN_NUMBER = 1
 MAX_NUMBER = 20
+MIN_PLAYERS = 2
 
+
+# =================================
+# لینک پروفایل بازیکن
+# =================================
 
 def make_player_link(player):
-    """ساخت لینک قابل کلیک پروفایل بازیکن."""
-
-    name = html.escape(player["name"])
+    name = html.escape(player.get("name") or "بازیکن")
 
     if player.get("username"):
         username = html.escape(player["username"])
@@ -47,37 +45,46 @@ def make_player_link(player):
     return f'<a href="tg://user?id={player["id"]}">{name}</a>'
 
 
-def get_players_text(game):
-    """نمایش فهرست بازیکنان."""
+def make_owner_link(game):
+    name = html.escape(game.get("owner_name") or "برگزارکننده")
+    return (
+        f'<a href="tg://user?id={game["owner_id"]}">'
+        f'{name}</a>'
+    )
 
-    players = list(game["players"].values())
 
-    if not players:
-        return "هنوز کسی وارد بازی نشده است."
-
-    lines = []
-
-    for index, player in enumerate(players, 1):
-        lines.append(f'{index}. {make_player_link(player)}')
-
-    return "\n".join(lines)
-
+# =================================
+# متن ثبت‌نام
+# =================================
 
 def registration_text(game):
-    """متن زمان ثبت‌نام."""
+    players = list(game["players"].values())
 
-    return (
-        "🎯 <b>بازی حدس عدد PULSE</b>\n\n"
-        "یک عدد مخفی بین ۱ تا ۲۰ انتخاب می‌شود.\n"
-        "بازیکنان به نوبت عدد را حدس می‌زنند.\n\n"
-        f"👑 برگزارکننده: "
-        f'<a href="tg://user?id={game["owner_id"]}">'
-        f'{html.escape(game["owner_name"])}</a>\n'
-        f"👥 تعداد بازیکنان: {len(game['players'])}\n\n"
-        "<b>بازیکنان:</b>\n"
-        f"{get_players_text(game)}\n\n"
-        "برای شرکت در بازی روی دکمه ورود بزن."
-    )
+    lines = [
+        "🎯 <b>بازی حدس عدد PULSE</b>",
+        "",
+        f"👑 برگزارکننده: {make_owner_link(game)}",
+        f"🔢 محدوده عدد: {MIN_NUMBER} تا {MAX_NUMBER}",
+        f"👥 تعداد بازیکنان: {len(players)}",
+        "",
+        "<b>بازیکنان ثبت‌نام‌شده:</b>",
+    ]
+
+    if not players:
+        lines.append("هنوز کسی ثبت‌نام نکرده است.")
+    else:
+        for index, player in enumerate(players, 1):
+            lines.append(
+                f"{index}. {make_player_link(player)}"
+            )
+
+    lines.extend([
+        "",
+        f"برای شروع حداقل {MIN_PLAYERS} بازیکن لازم است.",
+        "برای شرکت روی دکمه ورود بزن.",
+    ])
+
+    return "\n".join(lines)
 
 
 def registration_keyboard(game_id):
@@ -96,20 +103,25 @@ def registration_keyboard(game_id):
             InlineKeyboardButton(
                 "🏁 شروع بازی",
                 callback_data=f"gn_start:{game_id}",
-            )
-        ]
+            ),
+        ],
     ])
 
 
-def guess_keyboard(game_id):
-    """ساخت دکمه‌های انتخاب عدد."""
+# =================================
+# دکمه‌های حدس عدد
+# =================================
 
+def guess_keyboard(game_id):
     rows = []
 
     for start in range(MIN_NUMBER, MAX_NUMBER + 1, 4):
         row = []
 
-        for number in range(start, min(start + 4, MAX_NUMBER + 1)):
+        for number in range(
+            start,
+            min(start + 4, MAX_NUMBER + 1),
+        ):
             row.append(
                 InlineKeyboardButton(
                     str(number),
@@ -122,17 +134,23 @@ def guess_keyboard(game_id):
     return InlineKeyboardMarkup(rows)
 
 
-def playing_text(game, message=""):
-    """متن وضعیت بازی."""
+# =================================
+# متن بازی
+# =================================
 
+def playing_text(game, message=None):
     players = list(game["players"].values())
+
+    if not players:
+        return "بازیکنی برای ادامه بازی وجود ندارد."
+
     current_index = game["turn_index"] % len(players)
     current_player = players[current_index]
 
     text = (
         "🎯 <b>بازی حدس عدد PULSE شروع شد!</b>\n\n"
         f"🔢 عدد مخفی بین {MIN_NUMBER} تا {MAX_NUMBER} است.\n"
-        f"👥 بازیکنان: {len(players)}\n"
+        f"👥 تعداد بازیکنان: {len(players)}\n"
         f"🎲 تعداد حدس‌ها: {game['attempts']}\n\n"
         f"⏳ نوبت: {make_player_link(current_player)}\n"
     )
@@ -145,9 +163,9 @@ def playing_text(game, message=""):
     return text
 
 
-# -----------------------------
-# دستور شروع بازی
-# -----------------------------
+# =================================
+# شروع بازی با دستور
+# =================================
 
 async def guess_number_command(
     update: Update,
@@ -159,6 +177,12 @@ async def guess_number_command(
     if not user or not message:
         return
 
+    if message.chat.type not in ("group", "supergroup"):
+        await message.reply_text(
+            "این بازی را داخل گروه تلگرام اجرا کن."
+        )
+        return
+
     game = create_game("guess_number", user)
 
     success, result = await join_game(game["id"], user)
@@ -167,10 +191,9 @@ async def guess_number_command(
         await message.reply_text(result)
         return
 
-    game["secret_number"] = None
     game["attempts"] = 0
     game["turn_index"] = 0
-    game["status"] = "registering"
+    game["secret_number"] = None
 
     await message.reply_text(
         registration_text(game),
@@ -179,90 +202,105 @@ async def guess_number_command(
     )
 
 
-# -----------------------------
+# =================================
 # ورود بازیکن
-# -----------------------------
+# =================================
 
 async def guess_join_callback(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE,
 ):
     query = update.callback_query
-    await query.answer()
-
     game_id = query.data.split(":")[1]
-    user = query.from_user
 
     game = ACTIVE_GAMES.get(game_id)
 
     if not game:
-        await query.answer("این بازی پیدا نشد.", show_alert=True)
-        return
-
-    if game["status"] != "registering":
         await query.answer(
-            "ثبت‌نام این بازی بسته شده است.",
+            "این بازی پیدا نشد.",
             show_alert=True,
         )
         return
 
-    success, result = await join_game(game_id, user)
+    success, result = await join_game(
+        game_id,
+        query.from_user,
+    )
 
-    await query.answer(result, show_alert=not success)
+    await query.answer(
+        result,
+        show_alert=not success,
+    )
 
     if success:
-        await query.edit_message_text(
-            registration_text(game),
-            reply_markup=registration_keyboard(game_id),
-            parse_mode=ParseMode.HTML,
-        )
+        try:
+            await query.edit_message_text(
+                registration_text(game),
+                reply_markup=registration_keyboard(game_id),
+                parse_mode=ParseMode.HTML,
+            )
+        except Exception:
+            logger.exception("Could not update registration message")
 
 
-# -----------------------------
+# =================================
 # نمایش بازیکنان
-# -----------------------------
+# =================================
 
 async def guess_players_callback(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE,
 ):
     query = update.callback_query
-    await query.answer()
-
     game_id = query.data.split(":")[1]
+
     game = ACTIVE_GAMES.get(game_id)
 
     if not game:
-        await query.answer("بازی پیدا نشد.", show_alert=True)
+        await query.answer(
+            "بازی پیدا نشد.",
+            show_alert=True,
+        )
         return
 
+    players = list(game["players"].values())
+
+    if not players:
+        text = "هنوز کسی ثبت‌نام نکرده است."
+    else:
+        lines = [
+            f"{index}. {make_player_link(player)}"
+            for index, player in enumerate(players, 1)
+        ]
+        text = "\n".join(lines)
+
     await query.answer(
-        f"تعداد بازیکنان: {len(game['players'])}",
+        f"تعداد بازیکنان: {len(players)}",
         show_alert=True,
     )
 
 
-# -----------------------------
-# شروع بازی
-# -----------------------------
+# =================================
+# شروع بازی توسط برگزارکننده
+# =================================
 
 async def guess_start_callback(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE,
 ):
     query = update.callback_query
-    await query.answer()
-
     game_id = query.data.split(":")[1]
-    user = query.from_user
 
     game = ACTIVE_GAMES.get(game_id)
 
     if not game:
-        await query.answer("بازی پیدا نشد.", show_alert=True)
+        await query.answer(
+            "بازی پیدا نشد.",
+            show_alert=True,
+        )
         return
 
-    if game["owner_id"] != user.id:
+    if query.from_user.id != game["owner_id"]:
         await query.answer(
             "فقط برگزارکننده می‌تواند بازی را شروع کند.",
             show_alert=True,
@@ -276,7 +314,17 @@ async def guess_start_callback(
         )
         return
 
-    success, result = await close_registration(game_id, user.id)
+    if len(game["players"]) < MIN_PLAYERS:
+        await query.answer(
+            f"برای شروع حداقل {MIN_PLAYERS} بازیکن لازم است.",
+            show_alert=True,
+        )
+        return
+
+    success, result = await close_registration(
+        game_id,
+        query.from_user.id,
+    )
 
     if not success:
         await query.answer(result, show_alert=True)
@@ -286,9 +334,10 @@ async def guess_start_callback(
         MIN_NUMBER,
         MAX_NUMBER,
     )
-
     game["attempts"] = 0
     game["turn_index"] = 0
+
+    await query.answer("بازی شروع شد! 🎯")
 
     await query.edit_message_text(
         playing_text(game, "🚀 بازی آغاز شد!"),
@@ -297,26 +346,40 @@ async def guess_start_callback(
     )
 
 
-# -----------------------------
+# =================================
 # ثبت حدس بازیکن
-# -----------------------------
+# =================================
 
 async def guess_number_callback(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE,
 ):
     query = update.callback_query
-    await query.answer()
 
-    parts = query.data.split(":")
-    game_id = parts[1]
-    guessed_number = int(parts[2])
+    try:
+        _, game_id, number_text = query.data.split(":")
+        guessed_number = int(number_text)
+    except (ValueError, AttributeError):
+        await query.answer(
+            "درخواست نامعتبر است.",
+            show_alert=True,
+        )
+        return
 
-    user = query.from_user
+    if not MIN_NUMBER <= guessed_number <= MAX_NUMBER:
+        await query.answer(
+            "این عدد در محدوده بازی نیست.",
+            show_alert=True,
+        )
+        return
+
     game = ACTIVE_GAMES.get(game_id)
 
     if not game:
-        await query.answer("بازی پیدا نشد.", show_alert=True)
+        await query.answer(
+            "این بازی پیدا نشد.",
+            show_alert=True,
+        )
         return
 
     if game["status"] != "playing":
@@ -329,14 +392,16 @@ async def guess_number_callback(
     players = list(game["players"].values())
 
     if not players:
-        await query.answer("بازیکنی در بازی نیست.", show_alert=True)
+        await query.answer(
+            "بازیکنی در بازی وجود ندارد.",
+            show_alert=True,
+        )
         return
 
-    current_player = players[
-        game["turn_index"] % len(players)
-    ]
+    current_index = game["turn_index"] % len(players)
+    current_player = players[current_index]
 
-    if user.id != current_player["id"]:
+    if query.from_user.id != current_player["id"]:
         await query.answer(
             "الان نوبت شما نیست!",
             show_alert=True,
@@ -346,10 +411,13 @@ async def guess_number_callback(
     game["attempts"] += 1
     secret = game["secret_number"]
 
+    # پاسخ صحیح
     if guessed_number == secret:
-        await finish_game(game_id, user.id)
+        await finish_game(game_id, query.from_user.id)
 
         winner = make_player_link(current_player)
+
+        await query.answer("آفرین! عدد را درست حدس زدی.")
 
         await query.edit_message_text(
             "🏆 <b>بازی تمام شد!</b>\n\n"
@@ -361,6 +429,7 @@ async def guess_number_callback(
         )
         return
 
+    # پاسخ اشتباه
     if guessed_number < secret:
         result = "🔼 عدد مخفی بزرگ‌تر از اینه!"
     else:
@@ -370,6 +439,8 @@ async def guess_number_callback(
         game["turn_index"] + 1
     ) % len(players)
 
+    await query.answer("حدست ثبت شد!")
+
     await query.edit_message_text(
         playing_text(game, result),
         reply_markup=guess_keyboard(game_id),
@@ -377,9 +448,9 @@ async def guess_number_callback(
     )
 
 
-# -----------------------------
-# ثبت هندلرهای بازی
-# -----------------------------
+# =================================
+# اتصال هندلرهای بازی به ربات
+# =================================
 
 def register_guess_number_handlers(
     application: Application,
@@ -417,5 +488,6 @@ def register_guess_number_handlers(
             guess_number_callback,
             pattern=r"^gn_guess:",
         )
-)
-      
+    )
+
+    logger.info("Guess Number game handlers registered.")
