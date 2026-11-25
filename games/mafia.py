@@ -27,7 +27,14 @@ logger = logging.getLogger("PULSE.MAFIA")
 
 MIN_PLAYERS = 4
 
-ASSET_DIR = Path(__file__).parent / "assets" / "mafia"
+# مسیر واقعی پوشه تصاویر در مخزن GitHub
+ASSET_DIR = (
+    Path(__file__).resolve().parent.parent
+    / "telegram-ai-bot"
+    / "games"
+    / "assets"
+    / "mafia"
+)
 
 # نام واقعی ۶ تصویر؛ بدون تغییر نام فایل‌ها
 IMAGE_FILES = [
@@ -470,4 +477,4 @@ def register_mafia_handlers(application: Application):
     )
 
     logger.info("Mafia handlers registered successfully")
-    
+                
