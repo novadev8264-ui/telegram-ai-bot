@@ -9,10 +9,7 @@ from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 
 logger = logging.getLogger("PULSE.GAMES")
 
-# بازی‌های فعال
 ACTIVE_GAMES = {}
-
-# جلوگیری از ثبت‌نام هم‌زمان تکراری
 GAME_LOCK = asyncio.Lock()
 
 
@@ -112,9 +109,7 @@ def game_text(game):
         lines.append("هنوز کسی ثبت‌نام نکرده است.")
     else:
         for number, player in enumerate(players.values(), 1):
-            lines.append(
-                f"{number}. {player['mention']}"
-            )
+            lines.append(f"{number}. {player['mention']}")
 
     lines.extend([
         "",
@@ -128,7 +123,6 @@ async def join_game(game_id, user):
     """ثبت‌نام بازیکن با جلوگیری از ثبت‌نام تکراری."""
 
     async with GAME_LOCK:
-
         game = get_game(game_id)
 
         if not game:
@@ -157,11 +151,10 @@ async def join_game(game_id, user):
         return True, "با موفقیت وارد بازی شدی! 🎮"
 
 
-async def close_registration(game_id, user_id):
-    """بستن ثبت‌نام توسط برگزارکننده."""
+async def begin_registration_check(game_id, user_id):
+    """قفل کردن ثبت‌نام هنگام بررسی چت خصوصی."""
 
     async with GAME_LOCK:
-
         game = get_game(game_id)
 
         if not game:
@@ -171,6 +164,56 @@ async def close_registration(game_id, user_id):
             return False, "فقط برگزارکننده می‌تواند بازی را شروع کند."
 
         if game["status"] != "registering":
+            return False, "این بازی در حال بررسی یا قبلاً شروع شده است."
+
+        game["status"] = "checking_private"
+
+        logger.info(
+            "Private chat check started: game=%s",
+            game_id,
+        )
+
+        return True, game
+
+
+async def reopen_registration(game_id):
+    """باز کردن دوباره ثبت‌نام پس از بررسی ناموفق."""
+
+    async with GAME_LOCK:
+        game = get_game(game_id)
+
+        if not game:
+            return False
+
+        if game["status"] != "checking_private":
+            return False
+
+        game["status"] = "registering"
+
+        logger.info(
+            "Registration reopened: game=%s",
+            game_id,
+        )
+
+        return True
+
+
+async def close_registration(game_id, user_id):
+    """بستن ثبت‌نام توسط برگزارکننده."""
+
+    async with GAME_LOCK:
+        game = get_game(game_id)
+
+        if not game:
+            return False, "بازی پیدا نشد."
+
+        if game["owner_id"] != user_id:
+            return False, "فقط برگزارکننده می‌تواند بازی را شروع کند."
+
+        if game["status"] not in (
+            "registering",
+            "checking_private",
+        ):
             return False, "این بازی قبلاً شروع شده است."
 
         if not game["players"]:
@@ -187,7 +230,6 @@ async def finish_game(game_id, winner_id=None):
     """پایان بازی و ثبت برنده."""
 
     async with GAME_LOCK:
-
         game = get_game(game_id)
 
         if not game:
