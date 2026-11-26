@@ -595,6 +595,7 @@ async def start_mafia_registration(
         return
 
     if failed_players:
+        # بازیکنان را نگه می‌داریم؛ هر نفر با لینک اختصاصی وارد پیوی می‌شود.
         await reopen_registration(game_id)
 
         await update_registration_message(
@@ -602,20 +603,20 @@ async def start_mafia_registration(
             game,
         )
 
-        if len(game["players"]) < MIN_PLAYERS:
-            await context.bot.send_message(
-                chat_id=query.message.chat_id,
-                text=(
-                    "⚠️ تعداد بازیکنان باقی‌مانده کمتر از حداقل لازم است.\n"
-                    f"برای شروع دوباره باید حداقل {MIN_PLAYERS} نفر ثبت‌نام کنند."
-                ),
-            )
+        await context.bot.send_message(
+            chat_id=query.message.chat_id,
+            text=(
+                "⏳ لینک فعال‌سازی پیوی برای بازیکنان لازم ارسال شد.\n"
+                "بعد از اینکه همه بازیکنان دکمه مربوط به خودشان را زدند و در پیوی Start را انتخاب کردند، "
+                "برگزارکننده دوباره دکمه «شروع بازی» را بزند.\n\n"
+                "هیچ بازیکنی حذف نشده و ثبت‌نام همچنان باز است."
+            ),
+        )
 
-        logger.warning(
-            "Unavailable players: game=%s removed=%s remaining=%s",
+        logger.info(
+            "Private activation required: game=%s players=%s",
             game_id,
             len(failed_players),
-            len(game["players"]),
         )
         return
 
@@ -736,6 +737,63 @@ async def start_mafia_registration(
     )
 
 
+
+async def handle_mafia_start_payload(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """ثبت فعال‌سازی پیوی از طریق لینک اختصاصی دعوت بازی مافیا."""
+
+    message = update.effective_message
+    chat = update.effective_chat
+    user = update.effective_user
+    args = context.args or []
+
+    if not message or not chat or not user or chat.type != "private":
+        return False
+
+    if not args or not args[0].startswith("mafia_"):
+        return False
+
+    parts = args[0].split("_")
+    if len(parts) != 3:
+        await message.reply_text("لینک دعوت مافیا معتبر نیست.")
+        return True
+
+    _, game_id, invited_user_id = parts
+    try:
+        invited_user_id = int(invited_user_id)
+    except ValueError:
+        await message.reply_text("لینک دعوت مافیا معتبر نیست.")
+        return True
+
+    if user.id != invited_user_id:
+        await message.reply_text(
+            "این لینک دعوت مخصوص بازیکن دیگری است. لطفاً لینک مربوط به خودت را از گروه انتخاب کن."
+        )
+        return True
+
+    game = get_game(game_id)
+    if not game or game.get("type") != "mafia":
+        await message.reply_text(
+            "این بازی دیگر فعال نیست. از برگزارکننده بخواه یک بازی جدید ایجاد کند."
+        )
+        return True
+
+    player = game.get("players", {}).get(user.id)
+    if player is None:
+        await message.reply_text(
+            "نام شما در فهرست این بازی نیست. ابتدا از داخل گروه در بازی ثبت‌نام کن."
+        )
+        return True
+
+    player["private_ready"] = True
+    await message.reply_text(
+        "✅ پیوی PULSE برای این بازی فعال شد.\n\n"
+        "حالا به گروه بازی برگرد. وقتی همه بازیکنان پیوی را فعال کردند، "
+        "برگزارکننده دوباره دکمه «شروع بازی» را می‌زند و نقش و سؤال برایت ارسال می‌شود."
+    )
+    logger.info("Mafia private chat activated: game=%s user=%s", game_id, user.id)
+    return True
+
+
 def register_mafia_handlers(application: Application):
     """ثبت دستورها و دکمه‌های بازی مافیا."""
 
@@ -787,7 +845,6 @@ def register_mafia_handlers(application: Application):
             pattern=r"^mafia_cancel:",
         )
     )
-
     logger.info(
         "Mafia handlers registered successfully."
     )
