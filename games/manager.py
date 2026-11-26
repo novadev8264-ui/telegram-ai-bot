@@ -119,8 +119,8 @@ def game_text(game):
     return "\n".join(lines)
 
 
-async def join_game(game_id, user):
-    """ثبت‌نام بازیکن با جلوگیری از ثبت‌نام تکراری."""
+async def join_game(game_id, user, max_players=None):
+    """ثبت‌نام بازیکن با کنترل ظرفیت و جلوگیری از ثبت‌نام تکراری."""
 
     async with GAME_LOCK:
         game = get_game(game_id)
@@ -133,6 +133,15 @@ async def join_game(game_id, user):
 
         if user.id in game["players"]:
             return False, "شما قبلاً در این بازی ثبت‌نام کرده‌اید."
+
+        if (
+            max_players is not None
+            and len(game["players"]) >= max_players
+        ):
+            return False, (
+                f"ظرفیت این بازی تکمیل شده است؛ "
+                f"حداکثر {max_players} نفر."
+            )
 
         game["players"][user.id] = {
             "id": user.id,
@@ -256,4 +265,4 @@ async def remove_game(game_id):
 
     async with GAME_LOCK:
         return ACTIVE_GAMES.pop(game_id, None)
-        
+    
