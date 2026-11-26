@@ -405,6 +405,21 @@ async def start_mafia_registration(
         )
         return
 
+    failed_players = await check_private_chats(
+        context.bot,
+        game,
+        query.message.chat_id,
+    )
+
+    if failed_players:
+        await query.answer(
+            "چت خصوصی بعضی بازیکنان فعال نیست. ثبت‌نام همچنان باز است.",
+            show_alert=True,
+        )
+
+        await update_registration_message(query, game)
+        return
+
     success, result = await close_registration(
         game_id,
         query.from_user.id,
