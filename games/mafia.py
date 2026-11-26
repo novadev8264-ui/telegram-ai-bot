@@ -5,7 +5,7 @@ import html
 from pathlib import Path
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
-from telegram.error import BadRequest
+from telegram.error import BadRequest, TelegramError
 from telegram.ext import (
     Application,
     CallbackQueryHandler,
@@ -405,19 +405,43 @@ async def start_mafia_registration(
         )
         return
 
-    failed_players = await check_private_chats(
-        context.bot,
-        game,
-        query.message.chat_id,
-    )
+    await query.answer("در حال بررسی چت خصوصی بازیکنان...")
 
-    if failed_players:
-        await query.answer(
-            "چت خصوصی بعضی بازیکنان فعال نیست. ثبت‌نام همچنان باز است.",
-            show_alert=True,
+    try:
+        failed_players = await check_private_chats(
+            context.bot,
+            game,
+            query.message.chat_id,
         )
 
+    except TelegramError:
+        logger.exception(
+            "Private chat check failed: game=%s",
+            game_id,
+        )
+
+        await update_message(
+            query,
+            (
+                "⚠️ <b>بررسی چت خصوصی انجام نشد.</b>\n\n"
+                "احتمالاً خطای موقت ارتباط با تلگرام رخ داده است.\n"
+                "هیچ بازیکنی حذف نشده و ثبت‌نام همچنان باز است.\n\n"
+                "لطفاً کمی بعد دوباره تلاش کنید."
+            ),
+            registration_keyboard(game_id),
+        )
+        return
+
+    if failed_players:
         await update_registration_message(query, game)
+
+        if len(game["players"]) < MIN_PLAYERS:
+            logger.warning(
+                "Not enough players after private chat check: game=%s players=%s",
+                game_id,
+                len(game["players"]),
+            )
+
         return
 
     success, result = await close_registration(
@@ -426,19 +450,21 @@ async def start_mafia_registration(
     )
 
     if not success:
-        await query.answer(result, show_alert=True)
+        await update_message(
+            query,
+            f"⚠️ {html.escape(str(result))}",
+            registration_keyboard(game_id),
+        )
         return
 
     game["phase"] = "roles_pending"
-
-    await query.answer("ثبت‌نام بسته شد.")
 
     await update_message(
         query,
         (
             "🌙 <b>ثبت‌نام بازی مافیا بسته شد!</b>\n\n"
             f"👥 تعداد بازیکنان: {len(game['players'])}\n"
-            "✅ بازیکنان با موفقیت ثبت‌نام شدند.\n\n"
+            "✅ دسترسی چت خصوصی بازیکنان بررسی شد.\n\n"
             "🎭 مرحله بعد: آماده‌سازی و ارسال خصوصی نقش‌ها."
         ),
     )
@@ -494,4 +520,3 @@ def register_mafia_handlers(application: Application):
     )
 
     logger.info("Mafia handlers registered successfully")
-        
