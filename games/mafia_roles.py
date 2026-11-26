@@ -9,11 +9,11 @@ from games.manager import remove_game
 logger = logging.getLogger("PULSE.MAFIA.ROLES")
 
 
-async def check_private_chats(bot, game):
+async def check_private_chats(bot, game, group_chat_id):
     """
     بررسی امکان ارسال پیام خصوصی به بازیکنان.
     بازیکنانی که چت خصوصی فعال ندارند از فهرست بازی
-    خارج می‌شوند تا پس از فعال‌سازی دوباره ثبت‌نام کنند.
+    خارج می‌شوند و در گروه راهنمای فعال‌سازی دریافت می‌کنند.
     """
 
     failed_players = []
@@ -33,6 +33,39 @@ async def check_private_chats(bot, game):
                 "Private chat unavailable: game=%s user=%s",
                 game["id"],
                 user_id,
+            )
+
+    if failed_players:
+        lines = [
+            "⚠️ <b>فعال‌سازی چت خصوصی</b>",
+            "",
+            "بازیکنان زیر هنوز امکان دریافت پیام خصوصی از ربات را ندارند:",
+            "",
+        ]
+
+        for player in failed_players:
+            lines.append(f"• {player['mention']}")
+
+        lines.extend([
+            "",
+            "برای شرکت در بازی:",
+            "۱. وارد گفت‌وگوی خصوصی ربات PULSE شوید.",
+            "۲. دستور /start را ارسال کنید.",
+            "۳. دوباره دکمه ورود به بازی را بزنید.",
+            "",
+            "ثبت‌نام بازی همچنان باز است.",
+        ])
+
+        try:
+            await bot.send_message(
+                chat_id=group_chat_id,
+                text="\n".join(lines),
+                parse_mode="HTML",
+            )
+        except TelegramError:
+            logger.exception(
+                "Could not notify group about private chat failures: game=%s",
+                game["id"],
             )
 
     return failed_players
@@ -121,4 +154,4 @@ async def send_private_roles(bot, game, roles, questions):
     )
 
     return True, None
-    
+                        
