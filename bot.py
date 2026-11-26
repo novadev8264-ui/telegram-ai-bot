@@ -19,7 +19,7 @@ from telegram.ext import (
 
 from games.guess_number import register_guess_number_handlers
 from games.tic_tac_toe import register_tictactoe_handlers
-from games.mafia import register_mafia_handlers
+from games.mafia import register_mafia_handlers, handle_mafia_start_payload
 
 
 # =================================
@@ -264,6 +264,12 @@ async def start(
     context: ContextTypes.DEFAULT_TYPE,
 ):
 
+    # لینک اختصاصی دعوت مافیا به شکل /start mafia_<game_id>_<user_id>
+    # ابتدا پردازش می‌شود؛ Start معمولی همچنان رفتار قبلی را دارد.
+    handled = await handle_mafia_start_payload(update, context)
+    if handled:
+        return
+
     await update.effective_message.reply_text(
         "سلام! به ربات بازی‌های PULSE خوش آمدی. 🎮\n\n"
         "برای دیدن راهنما، دستور /help را بفرست."
@@ -379,3 +385,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+    
