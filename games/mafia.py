@@ -23,6 +23,8 @@ from games.manager import (
     remove_game,
 )
 
+from games.mafia_roles import check_private_chats
+
 logger = logging.getLogger("PULSE.MAFIA")
 
 MIN_PLAYERS = 4
@@ -477,4 +479,4 @@ def register_mafia_handlers(application: Application):
     )
 
     logger.info("Mafia handlers registered successfully")
-                
+        
