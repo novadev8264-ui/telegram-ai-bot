@@ -1,10 +1,12 @@
 
+import html
 import logging
 
 from telegram.constants import ChatAction
 from telegram.error import BadRequest, Forbidden, TelegramError
 
 from games.manager import remove_game
+
 
 logger = logging.getLogger("PULSE.MAFIA.ROLES")
 
@@ -42,10 +44,7 @@ async def check_private_chats(bot, game, group_chat_id):
     """
     بررسی دسترسی خصوصی بازیکنان.
 
-    ابتدا تمام بازیکنان بررسی می‌شوند.
-    اگر بازیکنی دسترسی نداشته باشد، در گروه اطلاع‌رسانی می‌شود.
-    سپس فقط بازیکنان مشکل‌دار از فهرست حذف می‌شوند.
-
+    بازیکنان مشکل‌دار فقط پس از اطلاع‌رسانی موفق در گروه حذف می‌شوند.
     خطاهای موقت باعث حذف بازیکنان نمی‌شوند.
     """
 
@@ -62,7 +61,9 @@ async def check_private_chats(bot, game, group_chat_id):
             if not _is_private_chat_unavailable(error):
                 raise
 
-            failed_players.append(player.copy())
+            failed_players.append(
+                (user_id, player.copy())
+            )
 
             logger.warning(
                 "Private chat unavailable: game=%s user=%s",
@@ -84,8 +85,16 @@ async def check_private_chats(bot, game, group_chat_id):
         "",
     ]
 
-    for player in failed_players:
-        lines.append(f"• {player['mention']}")
+    for user_id, player in failed_players:
+        mention = player.get("mention")
+
+        if not mention:
+            name = html.escape(
+                str(player.get("name", user_id))
+            )
+            mention = name
+
+        lines.append(f"• {mention}")
 
     lines.extend([
         "",
@@ -100,17 +109,17 @@ async def check_private_chats(bot, game, group_chat_id):
         "ثبت‌نام بازی همچنان باز است.",
     ])
 
-    # ابتدا اطلاع‌رسانی؛ اگر ارسال پیام گروه شکست بخورد،
-    # فهرست بازیکنان تغییر نمی‌کند.
+    # ابتدا اطلاع‌رسانی؛ در صورت شکست ارسال،
+    # فهرست بازیکنان بدون تغییر باقی می‌ماند.
     await bot.send_message(
         chat_id=group_chat_id,
         text="\n".join(lines),
         parse_mode="HTML",
     )
 
-    # حذف بازیکنان مشکل‌دار فقط پس از اطلاع‌رسانی موفق
-    for player in failed_players:
-        game["players"].pop(player["id"], None)
+    # حذف بازیکنان مشکل‌دار پس از اطلاع‌رسانی موفق
+    for user_id, player in failed_players:
+        game["players"].pop(user_id, None)
 
     logger.info(
         "Private chat check completed: game=%s failed=%s remaining=%s",
@@ -119,7 +128,10 @@ async def check_private_chats(bot, game, group_chat_id):
         len(game["players"]),
     )
 
-    return failed_players
+    return [
+        player
+        for _, player in failed_players
+    ]
 
 
 async def send_private_roles(bot, game, roles, questions):
@@ -135,28 +147,81 @@ async def send_private_roles(bot, game, roles, questions):
             "mafia": "سؤال مافیا"
         }
 
-    در صورت شکست ارسال حتی یک نقش، کل بازی لغو می‌شود.
+    در صورت شکست ارسال یا ناقص بودن اطلاعات،
+    بازی لغو می‌شود.
     """
 
+    game_id = game["id"]
     players = list(game["players"].values())
 
     if not players:
+        logger.error(
+            "Cannot send roles: no players. game=%s",
+            game_id,
+        )
+
+        remove_game(game_id)
         return False, None
 
-    # بررسی اطلاعات تمام بازیکنان قبل از ارسال
+    if not isinstance(roles, dict):
+        logger.error(
+            "Invalid roles data: game=%s",
+            game_id,
+        )
+
+        remove_game(game_id)
+        return False, None
+
+    if not isinstance(questions, dict):
+        logger.error(
+            "Invalid questions data: game=%s",
+            game_id,
+        )
+
+        remove_game(game_id)
+        return False, None
+
+    # اعتبارسنجی تمام اطلاعات قبل از ارسال پیام‌ها
     for player in players:
-        user_id = player["id"]
+        user_id = player.get("id")
+
+        if user_id is None:
+            logger.error(
+                "Player has no user ID: game=%s",
+                game_id,
+            )
+
+            remove_game(game_id)
+            return False, None
+
         role = roles.get(user_id)
 
         if role not in ("citizen", "mafia"):
-            logger.error("Invalid role: user=%s", user_id)
+            logger.error(
+                "Invalid role: game=%s user=%s",
+                game_id,
+                user_id,
+            )
+
+            remove_game(game_id)
             return False, user_id
 
-        if not questions.get(role):
-            logger.error("Missing question: role=%s", role)
+        question = questions.get(role)
+
+        if (
+            not isinstance(question, str)
+            or not question.strip()
+        ):
+            logger.error(
+                "Missing or invalid question: game=%s role=%s",
+                game_id,
+                role,
+            )
+
+            remove_game(game_id)
             return False, user_id
 
-    # ارسال خصوصی نقش‌ها
+    # ارسال نقش‌ها به‌صورت خصوصی
     for player in players:
         user_id = player["id"]
         role = roles[user_id]
@@ -184,23 +249,24 @@ async def send_private_roles(bot, game, roles, questions):
         except TelegramError:
             logger.exception(
                 "Role delivery failed: game=%s user=%s",
-                game["id"],
+                game_id,
                 user_id,
             )
 
-            # لغو کامل بازی در صورت شکست ارسال
-            await remove_game(game["id"])
+            # ممکن است بعضی بازیکنان قبلاً پیام گرفته باشند؛
+            # پیام‌های ارسال‌شده قابل پس‌گرفتن نیستند.
+            remove_game(game_id)
 
             return False, user_id
 
-    # ثبت موفقیت ارسال تمام نقش‌ها
+    # ثبت موفقیت پس از ارسال تمام نقش‌ها
     game["roles"] = roles.copy()
     game["questions"] = questions.copy()
     game["phase"] = "roles_sent"
 
     logger.info(
         "All roles delivered: game=%s players=%s",
-        game["id"],
+        game_id,
         len(players),
     )
 
