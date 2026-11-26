@@ -2,18 +2,51 @@
 import logging
 
 from telegram.constants import ChatAction
-from telegram.error import TelegramError
+from telegram.error import BadRequest, Forbidden, TelegramError
 
 from games.manager import remove_game
 
 logger = logging.getLogger("PULSE.MAFIA.ROLES")
 
 
+def _is_private_chat_unavailable(error):
+    """
+    تشخیص خطاهایی که نشان می‌دهند چت خصوصی قابل دسترسی نیست.
+    خطاهای موقت شبکه و سرور در این دسته قرار نمی‌گیرند.
+    """
+
+    if isinstance(error, Forbidden):
+        return True
+
+    if isinstance(error, BadRequest):
+        description = str(error).lower()
+
+        unavailable_messages = (
+            "chat not found",
+            "bot can't initiate conversation",
+            "bot cannot initiate conversation",
+            "user is deactivated",
+            "user deactivated",
+            "bot was blocked by the user",
+        )
+
+        return any(
+            message in description
+            for message in unavailable_messages
+        )
+
+    return False
+
+
 async def check_private_chats(bot, game, group_chat_id):
     """
-    بررسی امکان ارسال پیام خصوصی به بازیکنان.
-    بازیکنانی که چت خصوصی فعال ندارند از فهرست بازی
-    خارج می‌شوند و در گروه راهنمای فعال‌سازی دریافت می‌کنند.
+    بررسی دسترسی خصوصی بازیکنان.
+
+    ابتدا تمام بازیکنان بررسی می‌شوند.
+    اگر بازیکنی دسترسی نداشته باشد، در گروه اطلاع‌رسانی می‌شود.
+    سپس فقط بازیکنان مشکل‌دار از فهرست حذف می‌شوند.
+
+    خطاهای موقت باعث حذف بازیکنان نمی‌شوند.
     """
 
     failed_players = []
@@ -25,9 +58,11 @@ async def check_private_chats(bot, game, group_chat_id):
                 action=ChatAction.TYPING,
             )
 
-        except TelegramError:
+        except (Forbidden, BadRequest) as error:
+            if not _is_private_chat_unavailable(error):
+                raise
+
             failed_players.append(player.copy())
-            game["players"].pop(user_id, None)
 
             logger.warning(
                 "Private chat unavailable: game=%s user=%s",
@@ -35,38 +70,54 @@ async def check_private_chats(bot, game, group_chat_id):
                 user_id,
             )
 
-    if failed_players:
-        lines = [
-            "⚠️ <b>فعال‌سازی چت خصوصی</b>",
-            "",
-            "بازیکنان زیر هنوز امکان دریافت پیام خصوصی از ربات را ندارند:",
-            "",
-        ]
+    if not failed_players:
+        return []
 
-        for player in failed_players:
-            lines.append(f"• {player['mention']}")
+    remaining_count = (
+        len(game["players"]) - len(failed_players)
+    )
 
-        lines.extend([
-            "",
-            "برای شرکت در بازی:",
-            "۱. وارد گفت‌وگوی خصوصی ربات PULSE شوید.",
-            "۲. دستور /start را ارسال کنید.",
-            "۳. دوباره دکمه ورود به بازی را بزنید.",
-            "",
-            "ثبت‌نام بازی همچنان باز است.",
-        ])
+    lines = [
+        "⚠️ <b>فعال‌سازی چت خصوصی</b>",
+        "",
+        "بازیکنان زیر هنوز امکان دریافت پیام خصوصی از ربات را ندارند:",
+        "",
+    ]
 
-        try:
-            await bot.send_message(
-                chat_id=group_chat_id,
-                text="\n".join(lines),
-                parse_mode="HTML",
-            )
-        except TelegramError:
-            logger.exception(
-                "Could not notify group about private chat failures: game=%s",
-                game["id"],
-            )
+    for player in failed_players:
+        lines.append(f"• {player['mention']}")
+
+    lines.extend([
+        "",
+        "برای شرکت در بازی:",
+        "۱. وارد گفت‌وگوی خصوصی ربات PULSE شوید.",
+        "۲. دستور /start را ارسال کنید.",
+        "۳. دوباره دکمه ورود به بازی را بزنید.",
+        "",
+        f"👥 بازیکنان باقی‌مانده: {remaining_count}",
+        f"حداقل بازیکنان لازم: {game.get('min_players', 4)}",
+        "",
+        "ثبت‌نام بازی همچنان باز است.",
+    ])
+
+    # ابتدا اطلاع‌رسانی؛ اگر ارسال پیام گروه شکست بخورد،
+    # فهرست بازیکنان تغییر نمی‌کند.
+    await bot.send_message(
+        chat_id=group_chat_id,
+        text="\n".join(lines),
+        parse_mode="HTML",
+    )
+
+    # حذف بازیکنان مشکل‌دار فقط پس از اطلاع‌رسانی موفق
+    for player in failed_players:
+        game["players"].pop(player["id"], None)
+
+    logger.info(
+        "Private chat check completed: game=%s failed=%s remaining=%s",
+        game["id"],
+        len(failed_players),
+        len(game["players"]),
+    )
 
     return failed_players
 
@@ -154,4 +205,4 @@ async def send_private_roles(bot, game, roles, questions):
     )
 
     return True, None
-                        
+    
