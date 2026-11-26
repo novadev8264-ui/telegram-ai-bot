@@ -19,17 +19,25 @@ from games.manager import (
     create_game,
     get_game,
     join_game,
+    begin_registration_check,
+    reopen_registration,
     close_registration,
     remove_game,
 )
 
-from games.mafia_roles import check_private_chats
+from games.mafia_roles import (
+    check_private_chats,
+    send_private_roles,
+)
+
+from games.mafia_questions import get_mafia_questions
 
 logger = logging.getLogger("PULSE.MAFIA")
 
 MIN_PLAYERS = 4
+MAX_PLAYERS = 15
 
-# مسیر واقعی پوشه تصاویر در مخزن GitHub
+
 ASSET_DIR = (
     Path(__file__).resolve().parent.parent
     / "telegram-ai-bot"
@@ -38,7 +46,6 @@ ASSET_DIR = (
     / "mafia"
 )
 
-# نام واقعی ۶ تصویر؛ بدون تغییر نام فایل‌ها
 IMAGE_FILES = [
     "file_00000000d2a481f4ba3c8367b292eaee.png",
     "file_00000000504481f4a7e8fa6eae44dd28.png",
@@ -47,6 +54,33 @@ IMAGE_FILES = [
     "IMG_۲۰۲۶۱۱۲۴_۲۰۱۰۱۲.jpg",
     "IMG_۲۰۲۶۱۱۲۴_۲۰۰۸۳۴.jpg",
 ]
+
+
+def get_mafia_count(player_count):
+    if 4 <= player_count <= 6:
+        return 1
+    if 7 <= player_count <= 9:
+        return 2
+    if 10 <= player_count <= 12:
+        return 3
+    if 13 <= player_count <= 15:
+        return 4
+    return 0
+
+
+def assign_mafia_roles(players):
+    player_ids = list(players.keys())
+    mafia_count = get_mafia_count(len(player_ids))
+
+    if not mafia_count:
+        raise ValueError("تعداد بازیکنان برای شروع معتبر نیست.")
+
+    mafia_ids = set(random.sample(player_ids, mafia_count))
+
+    return {
+        user_id: "mafia" if user_id in mafia_ids else "citizen"
+        for user_id in player_ids
+    }
 
 
 def get_character_images():
@@ -149,7 +183,7 @@ def player_list_text(game):
         f"🆔 کد بازی: <code>{html.escape(str(game['id']))}</code>",
         f"👑 برگزارکننده: {html.escape(game['owner_name'])}",
         "",
-        f"👥 بازیکنان ثبت‌نام‌شده: {len(players)}",
+        f"👥 بازیکنان ثبت‌نام‌شده: {len(players)} از {MAX_PLAYERS}",
         "",
         "📋 <b>فهرست بازیکنان:</b>",
     ]
@@ -163,6 +197,7 @@ def player_list_text(game):
     lines.extend([
         "",
         f"حداقل بازیکنان برای شروع: {MIN_PLAYERS} نفر",
+        f"حداکثر بازیکنان: {MAX_PLAYERS} نفر",
         "",
         "برای شرکت در بازی، دکمه ورود را انتخاب کنید.",
     ])
@@ -269,6 +304,7 @@ async def create_mafia_game(
     await join_game(game["id"], user)
 
     game["min_players"] = MIN_PLAYERS
+    game["max_players"] = MAX_PLAYERS
     game["phase"] = "registration"
 
     await update_registration_message(query, game)
@@ -296,6 +332,13 @@ async def join_mafia_game(
     if game["status"] != "registering":
         await query.answer(
             "ثبت‌نام این بازی بسته شده است.",
+            show_alert=True,
+        )
+        return
+
+    if query.from_user.id not in game["players"] and len(game["players"]) >= MAX_PLAYERS:
+        await query.answer(
+            f"ظرفیت بازی تکمیل شده است؛ حداکثر {MAX_PLAYERS} نفر.",
             show_alert=True,
         )
         return
@@ -393,16 +436,34 @@ async def start_mafia_registration(
 
     if game["status"] != "registering":
         await query.answer(
-            "ثبت‌نام این بازی قبلاً بسته شده است.",
+            "ثبت‌نام این بازی قبلاً بسته شده یا در حال بررسی است.",
             show_alert=True,
         )
         return
 
-    if len(game["players"]) < MIN_PLAYERS:
+    player_count = len(game["players"])
+
+    if player_count < MIN_PLAYERS:
         await query.answer(
             f"برای شروع حداقل {MIN_PLAYERS} بازیکن لازم است.",
             show_alert=True,
         )
+        return
+
+    if player_count > MAX_PLAYERS:
+        await query.answer(
+            f"حداکثر ظرفیت بازی {MAX_PLAYERS} نفر است.",
+            show_alert=True,
+        )
+        return
+
+    locked, result = await begin_registration_check(
+        game_id,
+        query.from_user.id,
+    )
+
+    if not locked:
+        await query.answer(str(result), show_alert=True)
         return
 
     await query.answer("در حال بررسی چت خصوصی بازیکنان...")
@@ -420,12 +481,13 @@ async def start_mafia_registration(
             game_id,
         )
 
+        await reopen_registration(game_id)
+
         await update_message(
             query,
             (
                 "⚠️ <b>بررسی چت خصوصی انجام نشد.</b>\n\n"
                 "احتمالاً خطای موقت ارتباط با تلگرام رخ داده است.\n"
-                "هیچ بازیکنی حذف نشده و ثبت‌نام همچنان باز است.\n\n"
                 "لطفاً کمی بعد دوباره تلاش کنید."
             ),
             registration_keyboard(game_id),
@@ -433,15 +495,56 @@ async def start_mafia_registration(
         return
 
     if failed_players:
+        await reopen_registration(game_id)
+
         await update_registration_message(query, game)
 
         if len(game["players"]) < MIN_PLAYERS:
-            logger.warning(
-                "Not enough players after private chat check: game=%s players=%s",
-                game_id,
-                len(game["players"]),
+            await context.bot.send_message(
+                chat_id=query.message.chat_id,
+                text=(
+                    "⚠️ تعداد بازیکنان باقی‌مانده کمتر از حداقل لازم است.\n"
+                    f"برای شروع دوباره باید حداقل {MIN_PLAYERS} نفر ثبت‌نام کنند."
+                ),
             )
 
+        logger.warning(
+            "Players unavailable in private chat: game=%s removed=%s remaining=%s",
+            game_id,
+            len(failed_players),
+            len(game["players"]),
+        )
+        return
+
+    try:
+        questions = await get_mafia_questions()
+
+        if (
+            not isinstance(questions, dict)
+            or not questions.get("citizen")
+            or not questions.get("mafia")
+        ):
+            raise ValueError("سؤال‌های معتبر برای بازی تولید نشدند.")
+
+        roles = assign_mafia_roles(game["players"])
+
+    except Exception:
+        logger.exception(
+            "Mafia question or role preparation failed: game=%s",
+            game_id,
+        )
+
+        await reopen_registration(game_id)
+
+        await update_message(
+            query,
+            (
+                "⚠️ <b>آماده‌سازی بازی انجام نشد.</b>\n\n"
+                "ثبت‌نام همچنان باز است.\n"
+                "لطفاً کمی بعد دوباره تلاش کنید."
+            ),
+            registration_keyboard(game_id),
+        )
         return
 
     success, result = await close_registration(
@@ -450,6 +553,8 @@ async def start_mafia_registration(
     )
 
     if not success:
+        await reopen_registration(game_id)
+
         await update_message(
             query,
             f"⚠️ {html.escape(str(result))}",
@@ -459,17 +564,63 @@ async def start_mafia_registration(
 
     game["phase"] = "roles_pending"
 
+    mafia_count = sum(1 for role in roles.values() if role == "mafia")
+
+    try:
+        roles_sent, failed_user_id = await send_private_roles(
+            context.bot,
+            game,
+            roles,
+            questions,
+        )
+
+    except Exception:
+        logger.exception(
+            "Unexpected error sending mafia roles: game=%s",
+            game_id,
+        )
+        roles_sent = False
+        failed_user_id = None
+
+    if not roles_sent:
+        logger.error(
+            "Mafia role delivery failed: game=%s user=%s",
+            game_id,
+            failed_user_id,
+        )
+
+        await remove_game(game_id)
+
+        await update_message(
+            query,
+            (
+                "❌ <b>ارسال نقش‌ها با مشکل روبه‌رو شد.</b>\n\n"
+                "بازی لغو شد تا نقش هیچ بازیکنی ناقص باقی نماند.\n"
+                "لطفاً یک بازی جدید بسازید."
+            ),
+        )
+        return
+
+    game["phase"] = "roles_sent"
+
     await update_message(
         query,
         (
-            "🌙 <b>ثبت‌نام بازی مافیا بسته شد!</b>\n\n"
+            "🌙 <b>بازی مافیای PULSE آغاز شد!</b>\n\n"
             f"👥 تعداد بازیکنان: {len(game['players'])}\n"
-            "✅ دسترسی چت خصوصی بازیکنان بررسی شد.\n\n"
-            "🎭 مرحله بعد: آماده‌سازی و ارسال خصوصی نقش‌ها."
+            f"🔴 تعداد مافیا: {mafia_count}\n"
+            f"🟢 تعداد شهروندان: {len(game['players']) - mafia_count}\n\n"
+            "🎭 نقش و سؤال اختصاصی هر بازیکن در چت خصوصی ارسال شد.\n"
+            "🤫 نقش و سؤال خود را برای دیگران فاش نکنید."
         ),
     )
 
-    logger.info("Mafia registration closed: game=%s", game_id)
+    logger.info(
+        "Mafia game started: game=%s players=%s mafia=%s",
+        game_id,
+        len(game["players"]),
+        mafia_count,
+    )
 
 
 def register_mafia_handlers(application: Application):
@@ -520,3 +671,4 @@ def register_mafia_handlers(application: Application):
     )
 
     logger.info("Mafia handlers registered successfully")
+    
