@@ -26,8 +26,9 @@ from games.manager import (
 )
 
 from games.mafia_roles import (
-    check_private_chats,
     send_private_roles,
+    send_private_invitation,
+    send_pending_role_to_player,
 )
 
 from games.mafia_questions import get_mafia_questions
@@ -506,241 +507,116 @@ async def start_mafia_registration(
     context: ContextTypes.DEFAULT_TYPE,
 ):
     query = update.callback_query
-
-    if query is None:
+    if query is None or query.message is None:
         return
 
     game_id = query.data.split(":", 1)[1]
     game = get_game(game_id)
-
-    if not game or game["type"] != "mafia":
-        await query.answer(
-            "این بازی پیدا نشد.",
-            show_alert=True,
-        )
+    if not game or game.get("type") != "mafia":
+        await query.answer("این بازی پیدا نشد.", show_alert=True)
         return
-
     if game["owner_id"] != query.from_user.id:
-        await query.answer(
-            "فقط برگزارکننده می‌تواند بازی را شروع کند.",
-            show_alert=True,
-        )
+        await query.answer("فقط برگزارکننده می‌تواند بازی را شروع کند.", show_alert=True)
         return
-
     if game["status"] != "registering":
-        await query.answer(
-            "ثبت‌نام این بازی قبلاً بسته شده یا در حال بررسی است.",
-            show_alert=True,
-        )
+        await query.answer("این بازی در حال بررسی یا قبلاً شروع شده است.", show_alert=True)
         return
 
     player_count = len(game["players"])
-
     if player_count < MIN_PLAYERS:
-        await query.answer(
-            f"برای شروع حداقل {MIN_PLAYERS} بازیکن لازم است.",
-            show_alert=True,
-        )
+        await query.answer(f"برای شروع حداقل {MIN_PLAYERS} بازیکن لازم است.", show_alert=True)
         return
-
     if player_count > MAX_PLAYERS:
-        await query.answer(
-            f"حداکثر ظرفیت بازی {MAX_PLAYERS} نفر است.",
-            show_alert=True,
-        )
+        await query.answer(f"حداکثر ظرفیت بازی {MAX_PLAYERS} نفر است.", show_alert=True)
         return
 
-    locked, result = await begin_registration_check(
-        game_id,
-        query.from_user.id,
-    )
-
+    locked, result = await begin_registration_check(game_id, query.from_user.id)
     if not locked:
-        await query.answer(
-            str(result),
-            show_alert=True,
-        )
+        await query.answer(str(result), show_alert=True)
         return
-
     game = result
+    await query.answer("در حال آماده‌سازی و ارسال نقش‌ها...")
 
-    await query.answer(
-        "در حال بررسی چت خصوصی بازیکنان..."
-    )
-
-    try:
-        failed_players = await check_private_chats(
-            context.bot,
-            game,
-            query.message.chat_id,
-        )
-
-    except Exception:
-        logger.exception(
-            "Private chat check failed: game=%s",
-            game_id,
-        )
-
-        await reopen_registration(game_id)
-
-        await update_message(
-            query,
-            (
-                "⚠️ <b>بررسی چت خصوصی انجام نشد.</b>\n\n"
-                "یک خطا هنگام ارتباط با تلگرام رخ داد.\n"
-                "ثبت‌نام دوباره باز شد؛ لطفاً کمی بعد تلاش کنید."
-            ),
-            registration_keyboard(game_id),
-        )
-        return
-
-    if failed_players:
-        # بازیکنان را نگه می‌داریم؛ هر نفر با لینک اختصاصی وارد پیوی می‌شود.
-        await reopen_registration(game_id)
-
-        await update_registration_message(
-            query,
-            game,
-        )
-
-        await context.bot.send_message(
-            chat_id=query.message.chat_id,
-            text=(
-                "⏳ لینک فعال‌سازی پیوی برای بازیکنان لازم ارسال شد.\n"
-                "بعد از اینکه همه بازیکنان دکمه مربوط به خودشان را زدند و در پیوی Start را انتخاب کردند، "
-                "برگزارکننده دوباره دکمه «شروع بازی» را بزند.\n\n"
-                "هیچ بازیکنی حذف نشده و ثبت‌نام همچنان باز است."
-            ),
-        )
-
-        logger.info(
-            "Private activation required: game=%s players=%s",
-            game_id,
-            len(failed_players),
-        )
-        return
-
+    # Generate roles/questions once and keep them while players activate their DMs.
     try:
         questions = await get_mafia_questions()
-
-        if (
-            not isinstance(questions, dict)
-            or not questions.get("citizen")
-            or not questions.get("mafia")
-        ):
-            raise ValueError(
-                "سؤال‌های معتبر برای بازی تولید نشدند."
-            )
-
-        roles = assign_mafia_roles(
-            game["players"]
-        )
-
+        if (not isinstance(questions, dict)
+                or not isinstance(questions.get("citizen"), str)
+                or not questions["citizen"].strip()
+                or not isinstance(questions.get("mafia"), str)
+                or not questions["mafia"].strip()):
+            raise ValueError("سؤال‌های معتبر برای بازی تولید نشدند.")
+        roles = assign_mafia_roles(game["players"])
     except Exception:
-        logger.exception(
-            "Mafia question or role preparation failed: game=%s",
-            game_id,
-        )
-
+        logger.exception("Mafia question or role preparation failed: game=%s", game_id)
         await reopen_registration(game_id)
-
         await update_message(
             query,
-            (
-                "⚠️ <b>آماده‌سازی بازی انجام نشد.</b>\n\n"
-                "ثبت‌نام همچنان باز است.\n"
-                "لطفاً کمی بعد دوباره تلاش کنید."
-            ),
+            "⚠️ <b>آماده‌سازی بازی انجام نشد.</b>\n\nثبت‌نام باز ماند؛ لطفاً کمی بعد دوباره تلاش کنید.",
             registration_keyboard(game_id),
         )
         return
 
-    success, result = await close_registration(
-        game_id,
-        query.from_user.id,
-    )
-
+    success, result = await close_registration(game_id, query.from_user.id)
     if not success:
         await reopen_registration(game_id)
-
-        await update_message(
-            query,
-            f"⚠️ {html.escape(str(result))}",
-            registration_keyboard(game_id),
-        )
+        await update_message(query, f"⚠️ {html.escape(str(result))}", registration_keyboard(game_id))
         return
 
     game = result
+    game["roles"] = roles
+    game["questions"] = questions
+    game["role_delivered"] = set()
+    game["role_pending"] = set()
     game["phase"] = "roles_pending"
 
-    mafia_count = sum(
-        1
-        for role in roles.values()
-        if role == "mafia"
-    )
-
     try:
-        roles_sent, failed_user_id = await send_private_roles(
-            context.bot,
-            game,
-            roles,
-            questions,
-        )
-
+        pending_ids = await send_private_roles(context.bot, game, roles, questions)
+        if pending_ids:
+            await send_private_invitation(context.bot, game, query.message.chat_id, pending_ids)
     except Exception:
-        logger.exception(
-            "Unexpected error sending mafia roles: game=%s",
-            game_id,
-        )
-
-        roles_sent = False
-        failed_user_id = None
-
-    if not roles_sent:
-        logger.error(
-            "Mafia role delivery failed: game=%s user=%s",
-            game_id,
-            failed_user_id,
-        )
-
-        await remove_game(game_id)
-
+        logger.exception("Mafia role delivery workflow failed: game=%s", game_id)
+        # Do not destroy the game or reroll roles. The organizer can retry after fixing the issue.
         await update_message(
             query,
-            (
-                "❌ <b>ارسال نقش‌ها کامل نشد و بازی لغو شد.</b>\n\n"
-                "ممکن است بعضی بازیکنان پیام نقش خود را دریافت کرده باشند.\n"
-                "لطفاً از ادامه این بازی خودداری کنید و یک بازی جدید بسازید."
-            ),
+            "⚠️ <b>ارسال بعضی پیام‌ها با خطا روبه‌رو شد.</b>\n\nبازی و نقش‌های تعیین‌شده حفظ شده‌اند. لاگ Railway را بررسی کنید.",
         )
         return
 
-    game["phase"] = "roles_sent"
-
-    await update_message(
-        query,
-        (
-            "🌙 <b>نقش‌های بازی مافیای PULSE ارسال شدند!</b>\n\n"
-            f"👥 تعداد بازیکنان: {len(game['players'])}\n"
-            f"🔴 تعداد مافیا: {mafia_count}\n"
-            f"🟢 تعداد شهروندان: {len(game['players']) - mafia_count}\n\n"
-            "🎭 نقش و سؤال اختصاصی هر بازیکن در چت خصوصی ارسال شد.\n"
-            "🤫 نقش و سؤال خود را برای دیگران فاش نکنید."
-        ),
-    )
+    mafia_count = sum(1 for role in roles.values() if role == "mafia")
+    if pending_ids:
+        game["phase"] = "roles_pending"
+        await update_message(
+            query,
+            (
+                "⏳ <b>بازی آماده است؛ ارسال نقش بعضی بازیکنان در انتظار فعال‌سازی پیوی است.</b>\n\n"
+                f"👥 بازیکنان: {len(game['players'])}\n"
+                f"🔴 مافیا: {mafia_count}\n"
+                f"🟢 شهروند: {len(game['players']) - mafia_count}\n\n"
+                "بازیکنان دعوت‌شده پس از زدن Start، نقش و سؤال خود را خودکار دریافت می‌کنند."
+            ),
+        )
+    else:
+        game["phase"] = "roles_sent"
+        await update_message(
+            query,
+            (
+                "🌙 <b>نقش‌های بازی مافیای PULSE برای همه ارسال شدند!</b>\n\n"
+                f"👥 تعداد بازیکنان: {len(game['players'])}\n"
+                f"🔴 تعداد مافیا: {mafia_count}\n"
+                f"🟢 تعداد شهروندان: {len(game['players']) - mafia_count}\n\n"
+                "🎭 نقش و سؤال اختصاصی در پیوی همه بازیکنان ارسال شد."
+            ),
+        )
 
     logger.info(
-        "Mafia roles sent: game=%s players=%s mafia=%s",
-        game_id,
-        len(game["players"]),
-        mafia_count,
+        "Mafia role dispatch complete: game=%s players=%s delivered=%s pending=%s mafia=%s",
+        game_id, len(game["players"]), len(game["role_delivered"]), len(pending_ids), mafia_count,
     )
-
 
 
 async def handle_mafia_start_payload(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """ثبت فعال‌سازی پیوی از طریق لینک اختصاصی دعوت بازی مافیا."""
-
+    """Handle a player-specific deep link and immediately deliver their pending role."""
     message = update.effective_message
     chat = update.effective_chat
     user = update.effective_user
@@ -748,7 +624,6 @@ async def handle_mafia_start_payload(update: Update, context: ContextTypes.DEFAU
 
     if not message or not chat or not user or chat.type != "private":
         return False
-
     if not args or not args[0].startswith("mafia_"):
         return False
 
@@ -765,32 +640,34 @@ async def handle_mafia_start_payload(update: Update, context: ContextTypes.DEFAU
         return True
 
     if user.id != invited_user_id:
-        await message.reply_text(
-            "این لینک دعوت مخصوص بازیکن دیگری است. لطفاً لینک مربوط به خودت را از گروه انتخاب کن."
-        )
+        await message.reply_text("این لینک مخصوص بازیکن دیگری است. لطفاً دکمه مربوط به نام خودت را در گروه بزن.")
         return True
 
     game = get_game(game_id)
     if not game or game.get("type") != "mafia":
-        await message.reply_text(
-            "این بازی دیگر فعال نیست. از برگزارکننده بخواه یک بازی جدید ایجاد کند."
-        )
+        await message.reply_text("این بازی دیگر در حافظه ربات فعال نیست. از برگزارکننده بخواه بازی را دوباره ایجاد کند.")
         return True
 
-    player = game.get("players", {}).get(user.id)
-    if player is None:
-        await message.reply_text(
-            "نام شما در فهرست این بازی نیست. ابتدا از داخل گروه در بازی ثبت‌نام کن."
-        )
+    if user.id not in game.get("players", {}):
+        await message.reply_text("نام شما در فهرست این بازی نیست. ابتدا از داخل گروه ثبت‌نام کن.")
         return True
 
-    player["private_ready"] = True
-    await message.reply_text(
-        "✅ پیوی PULSE برای این بازی فعال شد.\n\n"
-        "حالا به گروه بازی برگرد. وقتی همه بازیکنان پیوی را فعال کردند، "
-        "برگزارکننده دوباره دکمه «شروع بازی» را می‌زند و نقش و سؤال برایت ارسال می‌شود."
-    )
-    logger.info("Mafia private chat activated: game=%s user=%s", game_id, user.id)
+    # The user has now opened the private conversation. Deliver the already-assigned role.
+    try:
+        delivered, response = await send_pending_role_to_player(context.bot, game, user.id)
+    except TelegramError:
+        logger.exception("Could not deliver pending role after deep link: game=%s user=%s", game_id, user.id)
+        await message.reply_text("پیوی فعال شد، اما ارسال نقش با خطای تلگرام مواجه شد. لطفاً به برگزارکننده اطلاع بده.")
+        return True
+
+    await message.reply_text(("✅ " if delivered else "⚠️ ") + response)
+    if delivered:
+        pending = game.get("role_pending", set())
+        pending.discard(user.id)
+        if not pending and len(game.get("role_delivered", set())) == len(game.get("players", {})):
+            game["phase"] = "roles_sent"
+            logger.info("All mafia roles delivered: game=%s", game_id)
+    logger.info("Mafia private activation processed: game=%s user=%s delivered=%s", game_id, user.id, delivered)
     return True
 
 
@@ -848,4 +725,5 @@ def register_mafia_handlers(application: Application):
     logger.info(
         "Mafia handlers registered successfully."
     )
-    
+
+                    
