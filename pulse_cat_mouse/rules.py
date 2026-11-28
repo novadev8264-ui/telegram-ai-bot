@@ -37,4 +37,4 @@ def resolve_after_move(game, user_id):
         game["winner"] = "cat"
         return note, "cat"
     return note, None
-  
+
