@@ -20,6 +20,7 @@ from telegram.ext import (
 from games.guess_number import register_guess_number_handlers
 from games.tic_tac_toe import register_tictactoe_handlers
 from games.mafia import register_mafia_handlers, handle_mafia_start_payload
+from pulse_cat_mouse import register_cat_mouse_handlers
 
 
 # =================================
@@ -176,13 +177,16 @@ async def toggle_games(
 # =================================
 
 GAME_TEXT_COMMANDS = re.compile(
-    r"^\s*(بازی حدس عدد|بازی دوز|بازی مافیا)\s*$"
+    r"^\s*(بازی حدس عدد|بازی دوز|بازی مافیا|بازی موش و گربه)\s*$"
 )
 
 GAME_SLASH_COMMANDS = {
     "/guessnumber",
     "/tictactoe",
     "/mafia",
+    "/mousegame",
+    "/mousemap",
+    "/mousestatus",
 }
 
 
@@ -296,6 +300,10 @@ async def help_command(
         "🌙 بازی مافیا:\n"
         "بازی مافیا\n"
         "/mafia\n\n"
+        "🐱 بازی موش و گربه:\n"
+        "/mousegame برای ساخت بازی و ثبت‌نام\n"
+        "/mousemap برای نمایش نقشه\n"
+        "/mousestatus برای نمایش بازیکنان و وضعیت\n\n"
         "برای مدیریت ربات، مالک می‌تواند از دستور /owner استفاده کند."
     )
 
@@ -349,7 +357,7 @@ def main():
     # کنترل وضعیت بازی‌ها؛ قبل از هندلرهای بازی
     application.add_handler(
         MessageHandler(
-            filters.TEXT & ~filters.COMMAND,
+            filters.TEXT,
             game_message_guard,
         ),
         group=-1,
@@ -374,6 +382,7 @@ def main():
     register_guess_number_handlers(application)
     register_tictactoe_handlers(application)
     register_mafia_handlers(application)
+    register_cat_mouse_handlers(application)
 
     logger.info("All PULSE games registered.")
     logger.info("PULSE Games bot is ready.")
@@ -385,5 +394,6 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
     
