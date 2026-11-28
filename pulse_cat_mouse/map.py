@@ -59,4 +59,4 @@ def is_walkable(board, pos):
 def public_map(game):
     """نقشه عمومی بدون افشای موقعیت بازیکنان."""
     return "\n".join("".join(row) for row in game["board"])
-  
+
