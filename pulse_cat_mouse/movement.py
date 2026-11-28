@@ -27,4 +27,4 @@ def move_player(game, user_id, direction):
             player["pos"] = tunnels[1] if target == tunnels[0] else tunnels[0]
             return True, "از تونل عبور کردی! 🌀"
     return True, "حرکت ثبت شد."
-  
+
