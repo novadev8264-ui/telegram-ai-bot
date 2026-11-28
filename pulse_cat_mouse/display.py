@@ -73,4 +73,5 @@ def group_status_text(game, note=""):
 
 def roster_text(game):
     return players_text(game)
-  
+
+                                     
