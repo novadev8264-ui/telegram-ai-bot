@@ -30,4 +30,4 @@ def next_turn(game):
 
 def current_team(game):
     return game.get("phase", "mouse")
-  
+
