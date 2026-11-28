@@ -80,10 +80,18 @@ async def _start_game(query, context, game):
     if query.from_user.id != game["owner_id"]:
         await query.answer("فقط برگزارکننده می‌تواند بازی را شروع کند.", show_alert=True)
         return
+    if game["status"] != "registering":
+        await query.answer("این بازی در حال شروع یا اجراست.", show_alert=True)
+        return
     count = len(game["players"])
     if not MIN_PLAYERS <= count <= MAX_PLAYERS:
         await query.answer("برای شروع به ۴ تا ۱۲ بازیکن نیاز است.", show_alert=True)
         return
+
+    # ثبت وضعیت بررسی برای جلوگیری از شروع هم‌زمان با چند بار فشردن دکمه
+    # و جلوگیری از ورود بازیکن جدید هنگام بررسی دسترسی خصوصی.
+    game["status"] = "checking_private"
+
     # بررسی دسترسی پیام خصوصی همه بازیکنان پیش از آغاز
     blocked = []
     for uid in game["players"]:
@@ -92,6 +100,7 @@ async def _start_game(query, context, game):
         except Exception:
             blocked.append(uid)
     if blocked:
+        game["status"] = "registering"
         await query.answer("همه بازیکنان باید ابتدا در خصوصی ربات /start را بزنند.", show_alert=True)
         return
     cats, mice = assign_teams(game)
@@ -133,10 +142,10 @@ async def cat_mouse_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
         await query.answer("پیام این دکمه در دسترس نیست.", show_alert=True)
         return
     if action == "move":
-        if query.message.chat.type != "private" or query.message.chat_id != query.from_user.id:
+        if query.message.chat.type != "private" or query.message.chat.id != query.from_user.id:
             await query.answer("حرکت باید از پیام خصوصی ربات انجام شود.", show_alert=True)
             return
-    elif query.message.chat_id != game["chat_id"]:
+    elif query.message.chat.id != game["chat_id"]:
         await query.answer("این دکمه مربوط به گروه دیگری است.", show_alert=True)
         return
     if action == "join":
@@ -249,4 +258,5 @@ def register_cat_mouse_handlers(application: Application):
     application.add_handler(CommandHandler("mousestatus", mousestatus_command))
     application.add_handler(CallbackQueryHandler(cat_mouse_callback, pattern=r"^cm:"))
     logger.info("Cat & Mouse handlers registered.")
+
     
