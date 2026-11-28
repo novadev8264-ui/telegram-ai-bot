@@ -127,8 +127,18 @@ async def cat_mouse_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
     game = ACTIVE_CAT_MOUSE.get(game_id)
     if not game:
         await query.answer("این بازی پیدا نشد یا پایان یافته است.", show_alert=True); return
-    if not query.message or query.message.chat_id != game["chat_id"]:
-        await query.answer("این دکمه مربوط به گروه دیگری است.", show_alert=True); return
+    # دکمه‌های ثبت‌نام و شروع فقط در پیام گروهی معتبرند؛
+    # دکمه حرکت عمداً در پیام خصوصی بازیکن ارسال می‌شود.
+    if not query.message:
+        await query.answer("پیام این دکمه در دسترس نیست.", show_alert=True)
+        return
+    if action == "move":
+        if query.message.chat.type != "private" or query.message.chat_id != query.from_user.id:
+            await query.answer("حرکت باید از پیام خصوصی ربات انجام شود.", show_alert=True)
+            return
+    elif query.message.chat_id != game["chat_id"]:
+        await query.answer("این دکمه مربوط به گروه دیگری است.", show_alert=True)
+        return
     if action == "join":
         if game["status"] != "registering":
             await query.answer("ثبت‌نام بسته شده است.", show_alert=True); return
@@ -239,3 +249,4 @@ def register_cat_mouse_handlers(application: Application):
     application.add_handler(CommandHandler("mousestatus", mousestatus_command))
     application.add_handler(CallbackQueryHandler(cat_mouse_callback, pattern=r"^cm:"))
     logger.info("Cat & Mouse handlers registered.")
+    
