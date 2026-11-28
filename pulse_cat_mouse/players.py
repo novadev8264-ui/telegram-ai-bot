@@ -57,4 +57,5 @@ def players_text(game):
     lines.extend(f"{i}. {line}" for i, line in enumerate(cats, 1))
     lines += ["", f'👥 مجموع: {len(game["players"])} نفر']
     return "\n".join(lines)
-  
+
+    
