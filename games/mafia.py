@@ -23,6 +23,7 @@ from games.manager import (
     reopen_registration,
     close_registration,
     remove_game,
+    finish_game,
 )
 
 from games.mafia_roles import (
@@ -502,6 +503,223 @@ async def cancel_mafia_game(
     )
 
 
+def discussion_keyboard(game_id):
+    return InlineKeyboardMarkup([[InlineKeyboardButton(
+        "🗳 شروع رأی‌گیری", callback_data=f"mafia_vote_start:{game_id}"
+    )]])
+
+
+def voting_keyboard(game):
+    game_id = game["id"]
+    rows = []
+    for user_id in game.get("alive_players", []):
+        player = game["players"].get(user_id, {})
+        name = str(player.get("name") or "بازیکن")[:28]
+        rows.append([InlineKeyboardButton(
+            f"🗳 رأی به {name}", callback_data=f"mafia_vote:{game_id}:{user_id}"
+        )])
+    rows.append([InlineKeyboardButton(
+        "🔒 پایان رأی‌گیری و اعلام نتیجه", callback_data=f"mafia_vote_close:{game_id}"
+    )])
+    return InlineKeyboardMarkup(rows)
+
+
+async def send_discussion_prompt(bot, game):
+    """Announce the discussion phase after every role has been delivered."""
+    if game.get("phase") not in ("roles_sent", "roles_pending"):
+        return
+    if len(game.get("role_delivered", set())) != len(game.get("players", {})):
+        return
+    await bot.send_message(
+        chat_id=game["group_chat_id"],
+        text=(
+            "💬 <b>مرحله بحث شروع شد!</b>\n\n"
+            "بازیکنان درباره پاسخ‌ها گفت‌وگو کنند. وقتی آماده بودید، برگزارکننده "
+            "دکمه شروع رأی‌گیری را بزند.\n"
+            "در هر دور، هر بازیکن زنده می‌تواند یک رأی بدهد و تا قبل از بستن رأی‌گیری آن را تغییر دهد."
+        ),
+        parse_mode="HTML",
+        reply_markup=discussion_keyboard(game["id"]),
+    )
+    game["phase"] = "discussion"
+
+
+async def start_mafia_vote(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    game_id = query.data.split(":", 1)[1]
+    game = get_game(game_id)
+    if not game or game.get("type") != "mafia":
+        await query.answer("این بازی پیدا نشد.", show_alert=True)
+        return
+    if query.from_user.id != game["owner_id"]:
+        await query.answer("فقط برگزارکننده می‌تواند رأی‌گیری را شروع کند.", show_alert=True)
+        return
+    if game.get("phase") != "discussion":
+        await query.answer("در حال حاضر امکان شروع رأی‌گیری نیست.", show_alert=True)
+        return
+    alive = list(game.get("alive_players", []))
+    if len(alive) < 2:
+        await query.answer("بازیکن زنده کافی برای رأی‌گیری وجود ندارد.", show_alert=True)
+        return
+    game["phase"] = "voting"
+    game["votes"] = {}
+    game["voting_message_id"] = None
+    await query.answer("رأی‌گیری شروع شد.")
+    sent = await context.bot.send_message(
+        chat_id=game["group_chat_id"],
+        text=(
+            f"🗳 <b>رأی‌گیری دور {game.get('round', 1)} شروع شد</b>\n\n"
+            "برای ثبت رأی، نام بازیکن موردنظر را انتخاب کنید. رأی شما خصوصی نمایش داده نمی‌شود. "
+            "تا قبل از پایان رأی‌گیری می‌توانید رأی خود را تغییر دهید."
+        ),
+        parse_mode="HTML",
+        reply_markup=voting_keyboard(game),
+    )
+    game["voting_message_id"] = sent.message_id
+
+
+async def cast_mafia_vote(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    _, game_id, target_text = query.data.split(":", 2)
+    game = get_game(game_id)
+    if not game or game.get("type") != "mafia":
+        await query.answer("این بازی پیدا نشد.", show_alert=True)
+        return
+    voter_id = query.from_user.id
+    try:
+        target_id = int(target_text)
+    except ValueError:
+        await query.answer("رأی نامعتبر است.", show_alert=True)
+        return
+    if game.get("phase") != "voting":
+        await query.answer("رأی‌گیری فعال نیست.", show_alert=True)
+        return
+    if voter_id not in game.get("alive_players", []):
+        await query.answer("فقط بازیکنان زنده می‌توانند رأی بدهند.", show_alert=True)
+        return
+    if target_id not in game.get("alive_players", []):
+        await query.answer("این بازیکن دیگر در بازی نیست.", show_alert=True)
+        return
+    if voter_id == target_id:
+        await query.answer("نمی‌توانی به خودت رأی بدهی.", show_alert=True)
+        return
+    previous = game.setdefault("votes", {}).get(voter_id)
+    game["votes"][voter_id] = target_id
+    target_name = game["players"].get(target_id, {}).get("name", "بازیکن")
+    if previous == target_id:
+        await query.answer("رأی شما قبلاً برای همین بازیکن ثبت شده بود.")
+    elif previous is not None:
+        await query.answer(f"رأی شما به {target_name} تغییر کرد.")
+    else:
+        await query.answer(f"رأی شما به {target_name} ثبت شد.")
+
+
+async def close_mafia_vote(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    game_id = query.data.split(":", 1)[1]
+    game = get_game(game_id)
+    if not game or game.get("type") != "mafia":
+        await query.answer("این بازی پیدا نشد.", show_alert=True)
+        return
+    if query.from_user.id != game["owner_id"]:
+        await query.answer("فقط برگزارکننده می‌تواند رأی‌گیری را ببندد.", show_alert=True)
+        return
+    if game.get("phase") != "voting":
+        await query.answer("رأی‌گیری فعالی وجود ندارد.", show_alert=True)
+        return
+
+    alive = list(game.get("alive_players", []))
+    votes = game.get("votes", {})
+    valid_votes = [target for voter, target in votes.items()
+                   if voter in alive and target in alive and voter != target]
+    await query.answer("رأی‌گیری بسته شد.")
+
+    if not valid_votes:
+        game["phase"] = "discussion"
+        game["round"] = game.get("round", 1) + 1
+        await query.edit_message_text("⚠️ هیچ رأی معتبری ثبت نشد؛ این دور بدون حذف بازیکن پایان یافت.")
+        await context.bot.send_message(
+            chat_id=game["group_chat_id"],
+            text="💬 بحث را ادامه دهید. برگزارکننده می‌تواند رأی‌گیری دور بعد را شروع کند.",
+            reply_markup=discussion_keyboard(game_id),
+        )
+        return
+
+    counts = {}
+    for target in valid_votes:
+        counts[target] = counts.get(target, 0) + 1
+    highest = max(counts.values())
+    leaders = [target for target, count in counts.items() if count == highest]
+
+    if len(leaders) != 1:
+        game["phase"] = "discussion"
+        game["round"] = game.get("round", 1) + 1
+        tied_names = "، ".join(html.escape(game["players"][uid]["name"]) for uid in leaders)
+        await query.edit_message_text(
+            f"⚖️ رأی‌گیری مساوی شد ({highest} رأی).\nافراد مساوی: {tied_names}\nهیچ‌کس حذف نشد."
+        )
+        await context.bot.send_message(
+            chat_id=game["group_chat_id"],
+            text="💬 بحث را ادامه دهید؛ برگزارکننده می‌تواند دور بعدی رأی‌گیری را شروع کند.",
+            reply_markup=discussion_keyboard(game_id),
+        )
+        return
+
+    eliminated_id = leaders[0]
+    game["alive_players"].remove(eliminated_id)
+    eliminated = game["players"][eliminated_id]
+    eliminated["alive"] = False
+    role = game["roles"].get(eliminated_id)
+    role_text = "مافیا 🔴" if role == "mafia" else "شهروند 🟢"
+    eliminated_name = html.escape(eliminated.get("name") or "بازیکن")
+
+    mafia_alive = sum(1 for uid in game["alive_players"] if game["roles"].get(uid) == "mafia")
+    citizens_alive = len(game["alive_players"]) - mafia_alive
+    result_text = (
+        f"🚪 <b>{eliminated_name}</b> با {highest} رأی از بازی خارج شد.\n"
+        f"🎭 نقش او: <b>{role_text}</b>\n\n"
+        f"👥 بازیکنان باقی‌مانده: {len(game['alive_players'])}\n"
+        f"🔴 مافیای باقی‌مانده: {mafia_alive}\n"
+        f"🟢 شهروندان باقی‌مانده: {citizens_alive}"
+    )
+
+    if mafia_alive == 0 or mafia_alive >= citizens_alive:
+        citizens_won = mafia_alive == 0
+        winner = "citizens" if citizens_won else "mafia"
+        winner_text = "شهروندان" if citizens_won else "مافیا"
+        await finish_game(game_id, winner_id=winner)
+        game["phase"] = "finished"
+        role_lines = []
+        for player_id, player in game["players"].items():
+            player_role = "مافیا 🔴" if game["roles"].get(player_id) == "mafia" else "شهروند 🟢"
+            role_lines.append(
+                f"• {html.escape(player.get('name') or 'بازیکن')}: {player_role}"
+            )
+        role_reveal = "\n".join(role_lines)
+        await query.edit_message_text("🔒 رأی‌گیری پایان یافت.")
+        await context.bot.send_message(
+            chat_id=game["group_chat_id"],
+            text=(
+                result_text
+                + f"\n\n🏆 <b>{winner_text} برنده شدند!</b>"
+                + "\n\n📋 <b>نقش همه بازیکنان:</b>\n"
+                + role_reveal
+            ),
+            parse_mode="HTML",
+        )
+        return
+
+    game["phase"] = "discussion"
+    game["round"] = game.get("round", 1) + 1
+    game["votes"] = {}
+    await query.edit_message_text("🔒 رأی‌گیری بسته شد.")
+    await context.bot.send_message(
+        chat_id=game["group_chat_id"],
+        text=result_text + "\n\n💬 <b>مرحله بحث دور بعد شروع شد.</b>",
+        parse_mode="HTML",
+        reply_markup=discussion_keyboard(game_id),
+    )
+
 async def start_mafia_registration(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE,
@@ -568,7 +786,13 @@ async def start_mafia_registration(
     game["questions"] = questions
     game["role_delivered"] = set()
     game["role_pending"] = set()
+    game["alive_players"] = list(game["players"].keys())
+    game["round"] = 1
+    game["votes"] = {}
+    game["group_chat_id"] = query.message.chat_id
     game["phase"] = "roles_pending"
+    for player in game["players"].values():
+        player["alive"] = True
 
     try:
         pending_ids = await send_private_roles(context.bot, game, roles, questions)
@@ -608,6 +832,10 @@ async def start_mafia_registration(
                 "🎭 نقش و سؤال اختصاصی در پیوی همه بازیکنان ارسال شد."
             ),
         )
+        try:
+            await send_discussion_prompt(context.bot, game)
+        except TelegramError:
+            logger.exception("Could not send first discussion prompt: game=%s", game_id)
 
     logger.info(
         "Mafia role dispatch complete: game=%s players=%s delivered=%s pending=%s mafia=%s",
@@ -664,9 +892,15 @@ async def handle_mafia_start_payload(update: Update, context: ContextTypes.DEFAU
     if delivered:
         pending = game.get("role_pending", set())
         pending.discard(user.id)
-        if not pending and len(game.get("role_delivered", set())) == len(game.get("players", {})):
+        if (game.get("phase") in ("roles_pending", "roles_sent")
+                and not pending
+                and len(game.get("role_delivered", set())) == len(game.get("players", {}))):
             game["phase"] = "roles_sent"
             logger.info("All mafia roles delivered: game=%s", game_id)
+            try:
+                await send_discussion_prompt(context.bot, game)
+            except TelegramError:
+                logger.exception("Could not send discussion prompt after private activation: game=%s", game_id)
     logger.info("Mafia private activation processed: game=%s user=%s delivered=%s", game_id, user.id, delivered)
     return True
 
@@ -722,8 +956,12 @@ def register_mafia_handlers(application: Application):
             pattern=r"^mafia_cancel:",
         )
     )
+    application.add_handler(CallbackQueryHandler(start_mafia_vote, pattern=r"^mafia_vote_start:"))
+    application.add_handler(CallbackQueryHandler(cast_mafia_vote, pattern=r"^mafia_vote:"))
+    application.add_handler(CallbackQueryHandler(close_mafia_vote, pattern=r"^mafia_vote_close:"))
     logger.info(
         "Mafia handlers registered successfully."
     )
 
-                    
+
+    
